@@ -5,3 +5,4 @@ evals/
 *.md
 *.venv
 src/ira.egg-info/
+data/

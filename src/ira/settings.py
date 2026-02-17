@@ -10,5 +10,10 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     service_name: str = "intelligent-research-assistant"
 
+    # add to your Settings model
+    IRA_DATA_DIR: str = "data"
+    GITHUB_TOKEN: str | None = None
+
+
 
 settings = Settings()

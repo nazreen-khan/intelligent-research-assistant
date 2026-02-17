@@ -12,6 +12,7 @@ dependencies = [
   "typer",
   "rich",
   "httpx>=0.28.1",
+  "html2text>=2025.4.15",
 ]
 
 [project.optional-dependencies]
