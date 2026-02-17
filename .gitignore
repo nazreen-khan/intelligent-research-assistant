@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.jsonl
+evals/
+*.md
+*.venv
+src/ira.egg-info/
