@@ -5,7 +5,7 @@ from rich import print as rprint
 from pathlib import Path
 from typing import Optional
 
-
+from ira.ingest.processor import process_all
 from ira.settings import settings
 from ira.ingest.runner import run_ingest
 
@@ -32,6 +32,35 @@ def ingest_fetch(
         limit=limit,
     )
     typer.echo(f"Done. Raw: {data_dir / 'raw'} | Manifest: {manifest}")
+
+@ingest_app.command("process")
+def process_cmd(
+    raw: Path = typer.Option(Path("data/raw"), "--raw", help="Raw docs root"),
+    out: Path = typer.Option(Path("data/processed"), "--out", help="Processed docs root"),
+    force: bool = typer.Option(False, "--force", help="Re-process even if output exists"),
+    limit: int | None = typer.Option(None, "--limit", help="Max number of docs to process"),
+    only_kind: str | None = typer.Option(None, "--only-kind", help="Filter: docs|pdf|github"),
+    keep_pdf_page_breaks: bool = typer.Option(True, "--keep-pdf-page-breaks/--no-keep-pdf-page-breaks"),
+):
+    # uv run python -m ira ingest process --raw data/raw --out data/processed
+    # uv run python -m ira ingest process --only-kind pdf --out data/processed_try_v2 --limit 1
+    results = process_all(
+        raw_root=raw,
+        out_root=out,
+        force=force,
+        limit=limit,
+        only_kind=only_kind,
+        keep_pdf_page_breaks=keep_pdf_page_breaks,
+    )
+
+    ok = sum(1 for r in results if r.ok)
+    fail = sum(1 for r in results if not r.ok)
+
+    typer.echo(f"Processed: {len(results)} | ok={ok} fail={fail}")
+    if fail:
+        for r in results:
+            if not r.ok:
+                typer.echo(f" - {r.doc_id}: {r.error}")
 
 @app.command()
 def ingest():

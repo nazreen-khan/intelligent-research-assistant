@@ -13,6 +13,13 @@ dependencies = [
   "rich",
   "httpx>=0.28.1",
   "html2text>=2025.4.15",
+  "beautifulsoup4>=4.14.3",
+  "markdownify>=1.2.2",
+  "pdfminer-six>=20260107",
+  "charset-normalizer>=3.4.4",
+  "pymupdf>=1.27.1",
+  "pytesseract>=0.3.13",
+  "opencv-python>=4.13.0.92",
 ]
 
 [project.optional-dependencies]

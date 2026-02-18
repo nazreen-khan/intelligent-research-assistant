@@ -1,0 +1,91 @@
+C:.
+│   .env.example
+│   .gitignore
+│   .python-version
+│   main.py
+│   pyproject.toml
+│   README.md
+│   uv.lock
+│
+├───data
+│   ├───provenance
+│   │       manifest.jsonl
+│   │
+│   ├───raw
+│   │   ├───arxiv_2106.09685v1
+│   │   │       arxiv_api.xml
+│   │   │       meta.json
+│   │   │       paper.pdf
+│   │   │
+│   │   ├───arxiv_2205.14135v1
+│   │   │       arxiv_api.xml
+│   │   │       meta.json
+│   │   │       paper.pdf
+│   │   │
+│   │   ├───docs_docs-flashinfer-ai_9753a493952b
+│   │   │       meta.json
+│   │   │       page.html
+│   │   │       page.md
+│   │   │
+│   │   ├───docs_docs-nvidia-com_039b8a08f0ed
+│   │   │       meta.json
+│   │   │       page.html
+│   │   │       page.md
+│   │   │
+│   │   ├───gh_casper-hansen_autoawq_48bb4b2d9dfe
+│   │   │       meta.json
+│   │   │       quantizer.py
+│   │   │
+│   │   ├───gh_dao-ailab_flash-attention_a6564f822452
+│   │           flash_api.cpp
+│   │           meta.json
+│   │   
+│   └───seeds
+│           seed_try.jsonl
+│           seed_v1.jsonl
+│
+├───src
+│   ├───ira
+│   │   │   cli.py
+│   │   │   settings.py
+│   │   │   __init__.py
+│   │   │   __main__.py
+│   │   │
+│   │   ├───agent
+│   │   │       __init__.py
+│   │   │
+│   │   ├───app
+│   │   │       main.py
+│   │   │       __init__.py
+│   │   │
+│   │   ├───contracts
+│   │   │       schemas.py
+│   │   │       __init__.py
+│   │   │
+│   │   ├───eval
+│   │   │       __init__.py
+│   │   │
+│   │   ├───ingest
+│   │   │       arxiv_downloader.py
+│   │   │       docs_fetcher.py
+│   │   │       doc_id.py
+│   │   │       github_fetcher.py
+│   │   │       provenance.py
+│   │   │       runner.py
+│   │   │       seeds.py
+│   │   │       __init__.py
+│   │   │
+│   │   ├───observability
+│   │   │       logging.py
+│   │   │       middleware.py
+│   │   │       __init__.py
+│   │   │
+│   │   ├───policy
+│   │   │       __init__.py
+│   │   │
+│   │   └───retrieval
+│   │           __init__.py
+│
+└───tests
+        test_contracts.py
+        test_health.py
