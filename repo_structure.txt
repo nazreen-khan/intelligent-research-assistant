@@ -8,6 +8,20 @@ C:.
 │   uv.lock
 │
 ├───data
+│   ├───processed
+│   │   │
+│   │   ├───arxiv_2205.14135v1
+│   │   │       content.md
+│   │   │       meta.json
+│   │   │
+│   │   ├───docs_docs-nvidia-com_039b8a08f0ed
+│   │   │       content.md
+│   │   │       meta.json
+│   │   │
+│   │   └───gh_vllm-project_vllm_00bc5c82c4f4
+│   │           content.md
+│   │           meta.json
+│   │
 │   ├───provenance
 │   │       manifest.jsonl
 │   │
@@ -17,31 +31,16 @@ C:.
 │   │   │       meta.json
 │   │   │       paper.pdf
 │   │   │
-│   │   ├───arxiv_2205.14135v1
-│   │   │       arxiv_api.xml
-│   │   │       meta.json
-│   │   │       paper.pdf
-│   │   │
-│   │   ├───docs_docs-flashinfer-ai_9753a493952b
-│   │   │       meta.json
-│   │   │       page.html
-│   │   │       page.md
-│   │   │
 │   │   ├───docs_docs-nvidia-com_039b8a08f0ed
 │   │   │       meta.json
 │   │   │       page.html
 │   │   │       page.md
-│   │   │
-│   │   ├───gh_casper-hansen_autoawq_48bb4b2d9dfe
-│   │   │       meta.json
-│   │   │       quantizer.py
 │   │   │
 │   │   ├───gh_dao-ailab_flash-attention_a6564f822452
 │   │           flash_api.cpp
 │   │           meta.json
 │   │   
 │   └───seeds
-│           seed_try.jsonl
 │           seed_v1.jsonl
 │
 ├───src
@@ -70,6 +69,11 @@ C:.
 │   │   │       docs_fetcher.py
 │   │   │       doc_id.py
 │   │   │       github_fetcher.py
+│   │   │       normalize.py
+│   │   │       parse_code_snippets.py
+│   │   │       parse_html_to_md.py
+│   │   │       parse_pdf_to_md.py
+│   │   │       processor.py
 │   │   │       provenance.py
 │   │   │       runner.py
 │   │   │       seeds.py
@@ -89,3 +93,8 @@ C:.
 └───tests
         test_contracts.py
         test_health.py
+        test_normalize.py
+        test_parse_code_snippets.py
+        test_parse_html_to_md.py
+        test_parse_pdf_to_md.py
+        test_processor.py

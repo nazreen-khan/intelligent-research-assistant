@@ -6,3 +6,4 @@ evals/
 *.venv
 src/ira.egg-info/
 data/
+try.py
