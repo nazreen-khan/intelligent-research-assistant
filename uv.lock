@@ -798,6 +798,7 @@ dependencies = [
     { name = "pytesseract" },
     { name = "rich" },
     { name = "setuptools" },
+    { name = "tiktoken" },
     { name = "typer" },
     { name = "uvicorn" },
 ]
@@ -830,6 +831,7 @@ requires-dist = [
     { name = "rich" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "setuptools", specifier = "<82" },
+    { name = "tiktoken", specifier = ">=0.12.0" },
     { name = "typer" },
     { name = "uvicorn" },
 ]

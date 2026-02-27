@@ -260,7 +260,7 @@ def parse_pdf_doc_v2(raw_doc_dir: Path):
         raise RuntimeError(f"No PDF found in {raw_doc_dir}")
 
     parser = LlamaParse(
-        api_key="llx-coQXx2FjreDZQA0B3g0qVV5ix46Si5vQ6lNj4OFy7eT4tvq5",  # Replace with your actual API key, or set as env var
+        api_key="demo",  # Replace with your actual API key, or set as env var
         result_type="markdown"
     )
     # Load the data from your PDF file
