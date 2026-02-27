@@ -39,8 +39,6 @@ class Settings(BaseSettings):
 
     # Used only when QDRANT_MODE="embedded"
     QDRANT_PATH: str = "data/qdrant"
-
-    # Used only when QDRANT_MODE="server"
     QDRANT_URL: str = "http://localhost:6333"
     QDRANT_API_KEY: str | None = None   # set for Qdrant Cloud
 
@@ -52,7 +50,16 @@ class Settings(BaseSettings):
     QDRANT_HNSW_EF_CONSTRUCT: int = 100
     QDRANT_ON_DISK_PAYLOAD: bool = False   # True → saves RAM for large corpora
 
-    # ── Derived helpers (not from env) ────────────────────────────────────────
+    # ── Day 6: BM25 / SQLite FTS5 ─────────────────────────────────────────────
+    # Single SQLite file holding the FTS5 full-text index + chunk metadata.
+    # Uses SQLite's built-in BM25 ranking via the `bm25()` auxiliary function.
+    BM25_DB_PATH: str = "data/bm25/bm25_index.db"
+
+    # Max results returned from BM25 before hybrid merge (Day 7 will fuse these
+    # with the dense results — keep this larger than your final top_k)
+    BM25_TOP_N: int = 20
+
+    # ── Derived helpers ───────────────────────────────────────────────────────
     @property
     def data_dir(self) -> Path:
         return Path(self.IRA_DATA_DIR)
@@ -66,6 +73,10 @@ class Settings(BaseSettings):
     @property
     def qdrant_path(self) -> Path:
         return Path(self.QDRANT_PATH)
+
+    @property
+    def bm25_db_path(self) -> Path:
+        return Path(self.BM25_DB_PATH)
 
     @property
     def caching_enabled(self) -> bool:
