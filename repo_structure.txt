@@ -1,8 +1,6 @@
-C:.
 │   .env.example
 │   .gitignore
 │   .python-version
-│   0.7.0
 │   data_sources.md
 │   main.py
 │   pyproject.toml
@@ -11,6 +9,12 @@ C:.
 │   uv.lock
 │
 ├───data
+│   ├───cache
+│   │   └───embeddings
+│   │       └───BAAI_bge-small-en-v1.5
+│   │           └───58
+│   │                   58c05b4c513cae6567dc1fa3a69d4f55c2ebb456dc63f36253a8e8c094e0dee0.npy.tmp.npy
+│   │
 │   ├───chunks
 │   │   ├───arxiv_2205.14135v1
 │   │   │       chunks.jsonl
@@ -42,6 +46,14 @@ C:.
 │   │
 │   ├───provenance
 │   │       manifest.jsonl
+│   │
+│   ├───qdrant
+│   │   │   .lock
+│   │   │   meta.json
+│   │   │
+│   │   └───collection
+│   │       └───ira_chunks
+│   │               storage.sqlite
 │   │
 │   ├───raw
 │   │   ├───arxiv_2205.14135v1
@@ -109,6 +121,9 @@ C:.
 │   │   │       __init__.py
 │   │   │
 │   │   └───retrieval
+│   │           embedder.py
+│   │           index_runner.py
+│   │           qdrant_index.py
 │   │           __init__.py
 │   │
 │   └───ira.egg-info
@@ -121,9 +136,11 @@ C:.
 └───tests
         test_chunker.py
         test_contracts.py
+        test_embedder.py
         test_health.py
         test_normalize.py
         test_parse_code_snippets.py
         test_parse_html_to_md.py
         test_parse_pdf_to_md.py
         test_processor.py
+        test_qdrant_index.py
