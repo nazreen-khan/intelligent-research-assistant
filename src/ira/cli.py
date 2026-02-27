@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from ira.ingest.processor import process_all
+from ira.ingest.chunk_runner import chunk_all
 from ira.settings import settings
 from ira.ingest.runner import run_ingest
 
@@ -62,6 +63,37 @@ def process_cmd(
         for r in results:
             if not r.ok:
                 typer.echo(f" - {r.doc_id}: {r.error}")
+
+@ingest_app.command("chunk")
+def chunk_cmd(
+    processed: Path = typer.Option(Path("data/processed"), "--processed", help="Processed docs root"),
+    out: Path = typer.Option(Path("data/chunks"), "--out", help="Chunks output root"),
+    force: bool = typer.Option(False, "--force", help="Re-chunk even if output exists"),
+    limit: int | None = typer.Option(None, "--limit", help="Max number of docs to chunk"),
+):
+    # uv run python -m ira ingest chunk --processed data/processed --out data/chunks
+    # uv run python -m ira ingest chunk --processed data/processed --out data/chunks --force
+    # uv run python -m ira ingest chunk --processed data/processed --out data/chunks --limit 1
+    results = chunk_all(
+        processed_root=processed,
+        out_root=out,
+        force=force,
+        limit=limit,
+    )
+
+    ok = sum(1 for r in results if r.ok)
+    fail = sum(1 for r in results if not r.ok)
+    total_parents = sum(r.parent_count for r in results if r.ok)
+    total_children = sum(r.child_count for r in results if r.ok)
+
+    typer.echo(f"Chunked: {len(results)} docs | ok={ok} fail={fail}")
+    typer.echo(f"Total parents={total_parents} | Total children={total_children}")
+
+    if fail:
+        for r in results:
+            if not r.ok:
+                typer.echo(f"  FAIL {r.doc_id}: {r.error}")
+
 
 @app.command()
 def ingest():
