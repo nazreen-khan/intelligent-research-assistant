@@ -11,7 +11,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ira.ingest.parse_code_snippets import parse_github_doc
 from ira.ingest.parse_html_to_md import parse_html_doc
-from ira.ingest.parse_pdf_to_md import parse_pdf_doc
+from ira.ingest.parse_pdf_to_md import parse_pdf_doc, parse_pdf_doc_v2
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +100,8 @@ def process_one_doc(
         kind = _detect_kind(raw_doc_dir, raw_meta)
 
         if kind == "pdf":
-            content_md, processed_meta = parse_pdf_doc(raw_doc_dir, keep_page_breaks=keep_pdf_page_breaks)
+            # content_md, processed_meta = parse_pdf_doc(raw_doc_dir, keep_page_breaks=keep_pdf_page_breaks)
+            content_md, processed_meta = parse_pdf_doc_v2(raw_doc_dir)
         elif kind == "docs":
             content_md, processed_meta = parse_html_doc(raw_doc_dir)
         else:

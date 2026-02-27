@@ -43,7 +43,8 @@ def process_cmd(
     keep_pdf_page_breaks: bool = typer.Option(True, "--keep-pdf-page-breaks/--no-keep-pdf-page-breaks"),
 ):
     # uv run python -m ira ingest process --raw data/raw --out data/processed
-    # uv run python -m ira ingest process --only-kind pdf --out data/processed_try_v2 --limit 1
+    # uv run python -m ira ingest process --raw data/raw_v2 --only-kind pdf --out data/processed_v2 --limit 1
+    # uv run python -m ira ingest process --raw data/raw --only-kind pdf --out data/processed_v2
     results = process_all(
         raw_root=raw,
         out_root=out,

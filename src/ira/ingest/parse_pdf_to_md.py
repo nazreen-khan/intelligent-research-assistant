@@ -7,6 +7,7 @@ import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from llama_parse import LlamaParse
 
 from pdfminer.high_level import extract_text
 
@@ -234,3 +235,47 @@ def parse_pdf_doc(raw_doc_dir: Path, keep_page_breaks: bool = True) -> Tuple[str
     }
 
     return markdown, processed_meta
+
+def parse_pdf_doc_v2(raw_doc_dir: Path):
+    meta_path = raw_doc_dir / "meta.json"
+    if not meta_path.exists():
+        raise FileNotFoundError(f"Missing meta.json in {raw_doc_dir}")
+
+    raw_meta: Dict[str, Any] = json.loads(meta_path.read_text(encoding="utf-8"))
+    doc_id = raw_doc_dir.name
+    title = _pick(raw_meta, [["seed", "title"], ["title"]]) or doc_id
+    source_url = _pick(
+        raw_meta,
+        [
+            ["source", "pdf_url"],
+            ["source", "resolved_url"],
+            ["source", "url"],
+            ["seed", "url"],
+        ],
+    )
+    version = _pick(raw_meta, [["source", "version"], ["seed", "version"]])
+
+    pdf_path = _find_pdf_file(raw_doc_dir)
+    if pdf_path is None:
+        raise RuntimeError(f"No PDF found in {raw_doc_dir}")
+
+    parser = LlamaParse(
+        api_key="llx-coQXx2FjreDZQA0B3g0qVV5ix46Si5vQ6lNj4OFy7eT4tvq5",  # Replace with your actual API key, or set as env var
+        result_type="markdown"
+    )
+    # Load the data from your PDF file
+    documents = parser.load_data(pdf_path)
+    markdown_content = "\n\n".join([doc.text for doc in documents])
+
+    processed_meta: Dict[str, Any] = {
+        "doc_id": doc_id,
+        "title": title,
+        "source_type": (raw_meta.get("kind") or "pdf"),
+        "source_url": source_url,
+        "version": version,
+        "parser": {"name": "parse_pdf_to_md", "version": 1, "method": "llama_parse"},
+        "raw_meta": raw_meta,
+        "artifacts": {"pdf": pdf_path.name},
+    }
+
+    return markdown_content, processed_meta
