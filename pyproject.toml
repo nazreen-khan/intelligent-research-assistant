@@ -32,6 +32,9 @@ dependencies = [
   "sentence-transformers>=5.2.3",
   "qdrant-client>=1.17.0",
   "numpy>=2.4.2",
+  "langgraph>=1.0.10",
+  "anthropic>=0.84.0",
+  "openai>=2.24.0",
 ]
 
 [project.optional-dependencies]

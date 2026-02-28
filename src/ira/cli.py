@@ -763,15 +763,97 @@ def rerank_query(
                 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TOP-LEVEL STUBS (forward compatibility)
+# AGENT COMMANDS  (Day 9)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@app.command()
-def query(q: str):
-    """[Day 9+] Full agent query pipeline."""
-    rprint(f"[yellow]TODO:[/yellow] agent pipeline coming Day 9+. You asked: {q!r}")
-    rprint("[dim]For now, use: uv run python -m ira index query --q '...'[/dim]")
-    raise typer.Exit(code=0)
+agent_app = typer.Typer(no_args_is_help=True, help="Agent: full RAG pipeline with LangGraph")
+app.add_typer(agent_app, name="agent")
+
+
+@agent_app.command("query")
+def agent_query(
+    q: str = typer.Option(..., "--q", help="Research question"),
+    use_web: bool = typer.Option(False, "--use-web/--no-web", help="Allow web search fallback"),
+    debug: bool = typer.Option(False, "--debug", help="Print full trace + evidence"),
+    json_output: bool = typer.Option(False, "--json", help="Output raw JSON"),
+):
+    """
+    Run the full IRA agent pipeline: policy → intent → retrieve → grade → synthesize.
+
+    Examples:
+        uv run python -m ira agent query --q "How does FlashAttention reduce HBM reads?"
+        uv run python -m ira agent query --q "What is FP8 quantization?" --debug
+        uv run python -m ira agent query --q "Latest vLLM benchmarks" --use-web
+    """
+    from ira.agent.runner import run_agent  # lazy import
+
+    rprint(f"\n[bold cyan]IRA Agent Query[/bold cyan]")
+    rprint(f"  Question : [white]{q}[/white]")
+    rprint(f"  Web      : [green]{use_web}[/green]\n")
+
+    with console.status("[bold green]Running agent...[/bold green]", spinner="dots"):
+        response = run_agent(query=q, use_web=use_web)
+
+    # ── JSON output ───────────────────────────────────────────────────────────
+    if json_output:
+        typer.echo(response.model_dump_json(indent=2))
+        return
+
+    # ── Warnings ──────────────────────────────────────────────────────────────
+    if response.warnings:
+        for w in response.warnings:
+            rprint(f"[yellow]⚠ {w}[/yellow]")
+        rprint("")
+
+    # ── Answer ────────────────────────────────────────────────────────────────
+    rprint("[bold green]Answer[/bold green]")
+    rprint(response.final_answer)
+
+    # ── Citations ─────────────────────────────────────────────────────────────
+    if response.citations:
+        rprint(f"\n[bold]Citations ({len(response.citations)})[/bold]")
+        for c in response.citations:
+            url_str = f"  [dim]{c.url}[/dim]" if c.url else ""
+            rprint(f"  {c.label}{url_str}")
+
+    # ── Debug: trace + evidence ───────────────────────────────────────────────
+    if debug:
+        rprint(f"\n[bold cyan]Trace ({len(response.trace)} steps)[/bold cyan]")
+        trace_table = Table(show_lines=False, box=None)
+        trace_table.add_column("Step", justify="right", style="dim", width=5)
+        trace_table.add_column("Node",   style="cyan",  width=22)
+        trace_table.add_column("Status", width=8)
+        trace_table.add_column("ms",     justify="right", width=6)
+        trace_table.add_column("Detail")
+        for t in response.trace:
+            status_str = (
+                "[green]ok[/green]" if t.status == "ok"
+                else f"[red]{t.status}[/red]"
+            )
+            detail_str = "  ".join(f"{k}={v}" for k, v in t.detail.items())
+            trace_table.add_row(
+                str(t.step), t.node, status_str,
+                str(t.latency_ms), detail_str[:80],
+            )
+        console.print(trace_table)
+
+        if response.evidence:
+            rprint(f"\n[bold cyan]Evidence packs ({len(response.evidence)})[/bold cyan]")
+            ev_table = Table(show_lines=True)
+            ev_table.add_column("#",      justify="right", width=3)
+            ev_table.add_column("Score",  justify="right", width=7)
+            ev_table.add_column("Doc ID", style="cyan",    max_width=30)
+            ev_table.add_column("Section",                 max_width=35)
+            ev_table.add_column("Preview",                 max_width=55)
+            for i, ev in enumerate(response.evidence, 1):
+                ev_table.add_row(
+                    str(i),
+                    f"{ev.score:.4f}",
+                    ev.doc_id,
+                    ev.section or "—",
+                    ev.text[:180],
+                )
+            console.print(ev_table)
 
 
 @app.command()

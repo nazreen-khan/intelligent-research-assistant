@@ -63,8 +63,6 @@ class Settings(BaseSettings):
     # Model: BAAI/bge-reranker-base  — 278MB, CPU-friendly, free
     # Upgrade path: swap to BAAI/bge-reranker-v2-m3 (570MB, better quality)
     # via one env var change — no code changes needed.
-    # Sanity check: uv run python -c "from ira.settings import settings; print(settings.RERANKER_MODEL, settings.reranker_cache_dir)"
-
     RERANKER_MODEL: str = "BAAI/bge-reranker-base"
     RERANKER_DEVICE: str = "cpu"           # "cpu" | "cuda" | "mps"
     RERANKER_BATCH_SIZE: int = 16          # (query, passage) pairs per forward pass
@@ -75,6 +73,26 @@ class Settings(BaseSettings):
     # Set to empty string "" to disable
     RERANKER_CACHE_DIR: str = "data/cache/rerank"
 
+    # ── Day 9: LLM ────────────────────────────────────────────────────────────
+    # Provider: "anthropic" | "openai"
+    # Default: Anthropic claude-3-5-haiku — fast, cheap, strong for RAG synthesis
+    # To switch provider: set LLM_PROVIDER=openai + LLM_MODEL=gpt-4o-mini in .env
+    # LLM_PROVIDER: Literal["anthropic", "openai"] = "anthropic"
+    # LLM_MODEL: str = "claude-3-5-haiku-20241022"
+    LLM_PROVIDER: Literal["anthropic", "openai"] = "openai"
+    LLM_MODEL: str = "gpt-4o-mini"
+    LLM_API_KEY: str = ""               # set in .env — never hard-code
+    LLM_MAX_TOKENS: int = 1024          # max tokens in LLM response
+    LLM_TEMPERATURE: float = 0.1        # low = deterministic; good for RAG
+
+    # ── Day 9: Agent ──────────────────────────────────────────────────────────
+    # AGENT_MAX_RETRIES: max decompose→retrieve loops before giving up
+    # AGENT_WEAK_SCORE_THRESHOLD: reranker score below this → grade as "weak"
+    # AGENT_MIN_EVIDENCE_PACKS: fewer packs than this → grade as "weak"
+    AGENT_MAX_RETRIES: int = 2
+    AGENT_WEAK_SCORE_THRESHOLD: float = 0.3
+    AGENT_MIN_EVIDENCE_PACKS: int = 2
+
     # ── Derived helpers ───────────────────────────────────────────────────────
     @property
     def reranker_cache_dir(self) -> Path | None:
@@ -82,7 +100,6 @@ class Settings(BaseSettings):
             return None
         return Path(self.RERANKER_CACHE_DIR)
 
-    # ── Derived helpers ───────────────────────────────────────────────────────
     @property
     def data_dir(self) -> Path:
         return Path(self.IRA_DATA_DIR)
