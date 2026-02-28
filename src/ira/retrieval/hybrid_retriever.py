@@ -88,6 +88,9 @@ class EvidencePack:
     in_bm25:    bool  # appeared in BM25 results
     in_both:    bool  # appeared in both (strong signal)
 
+    # Day 8: reranker score (None if reranker not used)
+    reranker_score: Optional[float] = None
+
 
 @dataclass
 class ConfidenceSignals:
@@ -236,6 +239,7 @@ class HybridRetriever:
         rrf_k: int = RRF_K,
         dense_weight: float = 1.0,
         bm25_weight: float = 1.0,
+        reranker=None,              # Day 8: opt-in, None = reranker disabled
     ) -> None:
         self._embedder     = embedder
         self._dense_index  = dense_index
@@ -245,6 +249,8 @@ class HybridRetriever:
         self.rrf_k         = rrf_k
         self.dense_weight  = dense_weight
         self.bm25_weight   = bm25_weight
+        self._reranker     = reranker  # Day 8
+        self._exclude_sections_default: list[str] = []   # Day 8
 
     # ── Lazy loaders ──────────────────────────────────────────────────────────
 
@@ -273,13 +279,13 @@ class HybridRetriever:
             self._parent_store = get_parent_store(self._chunks_root)
         return self._parent_store
 
-    def close(self) -> None:
-        """Release dense index connection (BM25 and parent store need no cleanup)."""
-        if self._dense_index is not None:
-            try:
-                self._dense_index.close()
-            except Exception:
-                pass
+    # def close(self) -> None:
+    #     """Release dense index connection (BM25 and parent store need no cleanup)."""
+    #     if self._dense_index is not None:
+    #         try:
+    #             self._dense_index.close()
+    #         except Exception:
+    #             pass
 
     # ── Dense retrieval ───────────────────────────────────────────────────────
 
@@ -389,12 +395,13 @@ class HybridRetriever:
     def retrieve(
         self,
         query: str,
-        top_k:          int   = DEFAULT_TOP_K,
-        dense_n:        int   = DEFAULT_DENSE_N,
-        bm25_n:         int   = DEFAULT_BM25_N,
-        max_parent_chars: int = 6000,
-        dense_only:     bool  = False,
-        bm25_only:      bool  = False,
+        top_k:             int        = DEFAULT_TOP_K,
+        dense_n:           int        = DEFAULT_DENSE_N,
+        bm25_n:            int        = DEFAULT_BM25_N,
+        max_parent_chars:  int        = 6000,
+        dense_only:        bool       = False,
+        bm25_only:         bool       = False,
+        exclude_sections:  list[str]  | None = None,
     ) -> RetrievalResult:
         """
         Run hybrid retrieval for the given query.
@@ -434,6 +441,17 @@ class HybridRetriever:
 
         # ── 3. Deduplicate by parent, then take top candidates ────────────────
         # Take more than top_k before dedup to ensure we have enough after dedup
+        # ── 3. Filter excluded sections, deduplicate by parent ────────────────
+        if exclude_sections:
+            _excl_lower = [s.lower() for s in exclude_sections]
+            fused = [
+                item for item in fused
+                if not any(
+                    excl in (item.get("section") or "").lower()
+                    for excl in _excl_lower
+                )
+            ]
+
         prefetch = min(len(fused), max(top_k * 3, 15))
         fused_top = fused[:prefetch]
         deduped = self._dedup_by_parent(fused_top)
@@ -498,7 +516,19 @@ class HybridRetriever:
             both_contributed   = both_count,
         )
 
-        # ── 8. Debug payload ─────────────────────────────────────────────────
+        # ── 8. Rerank (opt-in) ────────────────────────────────────────────────
+        if self._reranker is not None and evidence_packs:
+            logger.debug("Reranking %d packs with cross-encoder", len(evidence_packs))
+            evidence_packs = self._reranker.rerank(
+                query=query,
+                evidence_packs=evidence_packs,
+                keep_k=top_k,
+            )
+            # Update final_rank to reflect post-rerank order
+            for new_rank, pack in enumerate(evidence_packs, 1):
+                object.__setattr__(pack, "final_rank", new_rank)
+
+        # ── 9. Debug payload ─────────────────────────────────────────────────
         debug: dict[str, Any] = {
             "query":          query,
             "fusion_mode":    "rrf_only" if (self.dense_weight == self.bm25_weight == 1.0)
@@ -554,14 +584,27 @@ def get_hybrid_retriever(
     rrf_k: int = RRF_K,
     dense_weight: float = 1.0,
     bm25_weight: float = 1.0,
+    use_reranker: bool = False,
+    exclude_sections_default: list[str] | None = None,
 ) -> HybridRetriever:
     """Build a HybridRetriever using default settings."""
     from ira.settings import settings
     if chunks_root is None:
         chunks_root = settings.data_dir / "chunks"
-    return HybridRetriever(
+
+    reranker = None
+    if use_reranker:
+        from ira.retrieval.reranker import get_reranker
+        reranker = get_reranker()
+
+    retriever = HybridRetriever(
         chunks_root=chunks_root,
         rrf_k=rrf_k,
         dense_weight=dense_weight,
         bm25_weight=bm25_weight,
+        reranker=reranker,
     )
+    if exclude_sections_default:
+        retriever._exclude_sections_default = exclude_sections_default
+    return retriever
+    
