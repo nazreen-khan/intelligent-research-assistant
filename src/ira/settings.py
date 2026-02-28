@@ -59,6 +59,29 @@ class Settings(BaseSettings):
     # with the dense results — keep this larger than your final top_k)
     BM25_TOP_N: int = 20
 
+    # ── Day 8: Cross-encoder reranker ─────────────────────────────────────────
+    # Model: BAAI/bge-reranker-base  — 278MB, CPU-friendly, free
+    # Upgrade path: swap to BAAI/bge-reranker-v2-m3 (570MB, better quality)
+    # via one env var change — no code changes needed.
+    # Sanity check: uv run python -c "from ira.settings import settings; print(settings.RERANKER_MODEL, settings.reranker_cache_dir)"
+
+    RERANKER_MODEL: str = "BAAI/bge-reranker-base"
+    RERANKER_DEVICE: str = "cpu"           # "cpu" | "cuda" | "mps"
+    RERANKER_BATCH_SIZE: int = 16          # (query, passage) pairs per forward pass
+    RERANKER_TOP_N: int = 20               # candidates fed into reranker from hybrid
+    RERANKER_KEEP_K: int = 5              # final results kept after reranking
+
+    # Disk cache for rerank results — sha256(query+chunk_ids) → scores JSON
+    # Set to empty string "" to disable
+    RERANKER_CACHE_DIR: str = "data/cache/rerank"
+
+    # ── Derived helpers ───────────────────────────────────────────────────────
+    @property
+    def reranker_cache_dir(self) -> Path | None:
+        if not self.RERANKER_CACHE_DIR:
+            return None
+        return Path(self.RERANKER_CACHE_DIR)
+
     # ── Derived helpers ───────────────────────────────────────────────────────
     @property
     def data_dir(self) -> Path:

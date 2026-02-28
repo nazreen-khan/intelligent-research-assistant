@@ -22,7 +22,7 @@ import hashlib
 import logging
 from pathlib import Path
 from typing import Optional, Sequence
-
+import os
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -120,6 +120,8 @@ class Embedder:
         if self.cache_dir is None:
             return None
         p = _cache_path(self.cache_dir, self._model_slug, text_sha)
+        p = os.path.abspath(p)
+        p = Path(p)
         if p.exists():
             try:
                 return np.load(str(p))
@@ -133,14 +135,32 @@ class Embedder:
             return
         p = _cache_path(self.cache_dir, self._model_slug, text_sha)
         p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(".npy.tmp")
+        # np.save appends .npy automatically when the path doesn't end in .npy.
+        # We pass a .tmp stem → numpy writes <sha>.tmp.npy
+        # Then rename <sha>.tmp.npy → <sha>.npy
+        tmp_stem = p.with_suffix("").with_name(p.stem + ".tmp")  # <sha>.tmp
+        tmp_actual = tmp_stem.with_suffix(".npy")                 # <sha>.tmp.npy
         try:
-            np.save(str(tmp), vec)
-            tmp.replace(p)
+            np.save(str(tmp_stem), vec)  # numpy writes <sha>.tmp.npy
+            # Retry rename up to 3 times — Windows may hold a brief file lock
+            import time
+            for attempt in range(3):
+                try:
+                    tmp_actual.replace(p)
+                    return  # success — exit immediately
+                except PermissionError:
+                    if attempt < 2:
+                        time.sleep(0.05)  # 50ms wait, then retry
+                    else:
+                        raise
         except Exception:
             logger.warning("Cache write failed for %s", p)
-            if tmp.exists():
-                tmp.unlink(missing_ok=True)
+        finally:
+            if tmp_actual.exists():
+                try:
+                    tmp_actual.unlink()
+                except Exception:
+                    pass
 
     # ── Core encode ───────────────────────────────────────────────────────────
 

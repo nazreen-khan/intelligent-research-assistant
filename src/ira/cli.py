@@ -603,6 +603,164 @@ def hybrid_query(
 
     retriever.close()
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# INDEX COMMANDS — Reranker  (Day 8)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@index_app.command("rerank-query")
+def rerank_query(
+    q: str = typer.Option(..., "--q", help="Query text"),
+    keep_k: int = typer.Option(5, "--keep-k", help="Final results after reranking"),
+    retrieval_top_n: int = typer.Option(20, "--retrieval-top-n", help="Hybrid candidates fed to reranker"),
+    show_parent: bool = typer.Option(False, "--show-parent", help="Print full parent text"),
+    compare: bool = typer.Option(False, "--compare", help="Show pre-rerank vs post-rerank order"),
+    json_output: bool = typer.Option(False, "--json", help="Output raw JSON"),
+):
+    """
+    Hybrid retrieval → Cross-encoder rerank → top-K results.
+
+    Fetches retrieval-top-n candidates via hybrid (Dense+BM25+RRF),
+    then reranks them with BGE cross-encoder, returning the best keep-k.
+
+    Use --compare to see how reranking changed the order vs RRF alone.
+
+    Examples:
+        uv run python -m ira index rerank-query --q "FlashAttention IO-awareness"
+        uv run python -m ira index rerank-query --q "FP8 H100" --compare
+        uv run python -m ira index rerank-query --q "KV cache memory" --keep-k 3 --show-parent
+    """
+    from ira.retrieval.rerank_runner import query_with_rerank
+
+    rprint(f"\n[bold cyan]Rerank Query:[/bold cyan] {q!r}")
+    rprint(f"  Pipeline : [green]Hybrid (Dense+BM25+RRF) → BGE Cross-Encoder[/green]")
+    rprint(f"  Retrieve : [green]{retrieval_top_n}[/green] candidates  →  Keep: [green]{keep_k}[/green]\n")
+
+    result = query_with_rerank(
+        query_text=q,
+        keep_k=keep_k,
+        retrieval_top_n=retrieval_top_n,
+    )
+
+    if json_output:
+        import dataclasses
+        output = {
+            "query":           result.query,
+            "retrieval_count": result.retrieval_count,
+            "rerank_count":    result.rerank_count,
+            "retrieval_ms":    result.retrieval_ms,
+            "rerank_ms":       result.rerank_ms,
+            "total_ms":        result.total_ms,
+            "cache_hit":       result.cache_hit,
+            "evidence_packs":  [dataclasses.asdict(p) for p in result.evidence_packs],
+            "debug":           result.debug,
+        }
+        typer.echo(json.dumps(output, indent=2, ensure_ascii=False))
+        return
+
+    if not result.evidence_packs:
+        rprint("[yellow]No results found.[/yellow]")
+        return
+
+    # ── Timing panel ──────────────────────────────────────────────────────────
+    cache_str = "[green]✓ cache hit[/green]" if result.cache_hit else "[dim]model run[/dim]"
+    rprint("[bold]Timing[/bold]")
+    rprint(f"  Retrieval : [cyan]{result.retrieval_ms}ms[/cyan]")
+    rprint(f"  Rerank    : [cyan]{result.rerank_ms}ms[/cyan]  ({cache_str})")
+    rprint(f"  Total     : [cyan]{result.total_ms}ms[/cyan]\n")
+
+    # ── Pre-rerank vs post-rerank comparison (--compare) ─────────────────────
+    if compare:
+        rprint("[bold cyan]Order Comparison: RRF rank → Reranker rank[/bold cyan]")
+        comp_table = Table(show_lines=True)
+        comp_table.add_column("Rerank #", justify="right", width=8)
+        comp_table.add_column("RRF Rank", justify="right", width=8)
+        comp_table.add_column("Reranker Score", justify="right", width=14)
+        comp_table.add_column("RRF Score",      justify="right", width=10)
+        comp_table.add_column("Move",           justify="center", width=6)
+        comp_table.add_column("Doc ID",         style="cyan", max_width=30)
+        comp_table.add_column("Section",        max_width=35)
+
+        # Build pre-rerank rank lookup from debug payload
+        pre_ranks = {
+            c["chunk_id"]: c["rank"]
+            for c in result.debug.get("pre_rerank_order", [])
+        }
+
+        for new_rank, p in enumerate(result.evidence_packs, 1):
+            old_rank = pre_ranks.get(p.chunk_id, "?")
+            reranker_score = getattr(p, "reranker_score", None)
+            score_str = f"{reranker_score:.4f}" if reranker_score is not None else "—"
+
+            # Show movement indicator
+            if isinstance(old_rank, int):
+                diff = old_rank - new_rank
+                if diff > 0:
+                    move = f"[green]↑{diff}[/green]"
+                elif diff < 0:
+                    move = f"[red]↓{abs(diff)}[/red]"
+                else:
+                    move = "[dim]=[/dim]"
+            else:
+                move = "?"
+
+            comp_table.add_row(
+                str(new_rank),
+                str(old_rank),
+                score_str,
+                f"{p.rrf_score:.6f}",
+                move,
+                p.doc_id,
+                p.section,
+            )
+        console.print(comp_table)
+        rprint("")
+
+    # ── Final results table ───────────────────────────────────────────────────
+    table = Table(title=f"Top-{keep_k} Reranked Results", show_lines=True)
+    table.add_column("#",               justify="right", style="dim", width=3)
+    table.add_column("Reranker Score",  justify="right", width=14)
+    table.add_column("RRF Score",       justify="right", width=10)
+    table.add_column("Both?",           justify="center", width=5)
+    table.add_column("Doc ID",          style="cyan", max_width=30)
+    table.add_column("Section",         max_width=35)
+    table.add_column("Flags",           width=5)
+    table.add_column("Child text preview", max_width=55)
+
+    for p in result.evidence_packs:
+        flags = ("💻" if p.is_code else "") + ("📊" if p.is_table else "")
+        flags += ("⭐" if p.in_both else "")
+        reranker_score = getattr(p, "reranker_score", None)
+        score_str = f"{reranker_score:.4f}" if reranker_score is not None else "—"
+        both_str  = "⭐" if p.in_both else ""
+
+        table.add_row(
+            str(p.final_rank),
+            score_str,
+            f"{p.rrf_score:.6f}",
+            both_str,
+            p.doc_id,
+            p.section,
+            flags,
+            p.child_text[:200],
+        )
+    console.print(table)
+
+    # ── Parent text (if requested) ────────────────────────────────────────────
+    if show_parent:
+        rprint("\n[bold cyan]Parent Sections[/bold cyan]")
+        for p in result.evidence_packs:
+            reranker_score = getattr(p, "reranker_score", None)
+            score_str = f"{reranker_score:.4f}" if reranker_score is not None else "—"
+            rprint(f"\n[bold]#{p.final_rank} — {p.section}[/bold] "
+                   f"[dim]({p.doc_id})[/dim]  reranker={score_str}")
+            if p.parent_text:
+                preview = p.parent_text[:800]
+                if len(p.parent_text) > 800:
+                    preview += "\n[dim]…[/dim]"
+                rprint(preview)
+            else:
+                rprint("[yellow]  (parent text not available)[/yellow]")
+                
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TOP-LEVEL STUBS (forward compatibility)
