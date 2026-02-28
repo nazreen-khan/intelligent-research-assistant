@@ -1,3 +1,4 @@
+C:.
 │   .env.example
 │   .gitignore
 │   .python-version
@@ -13,10 +14,14 @@
 │   │       bm25_index.db
 │   │
 │   ├───cache
-│   │   └───embeddings
-│   │       └───BAAI_bge-small-en-v1.5
-│   │           └───58
-│   │                   58c05b4c513cae6567dc1fa3a69d4f55c2ebb456dc63f36253a8e8c094e0dee0.npy.tmp.npy
+│   │   ├───embeddings
+│   │   │   └───BAAI_bge-small-en-v1.5
+│   │   │       └───3c
+│   │   │               3ce0f5ab7c99f4b415bff1bc39643cf9b51354e337116a01682de6699fbb80f5.tmp.npy
+│   │   │
+│   │   └───rerank
+│   │       └───2c
+│   │               2c183f60cce222ba885128aba371eba0fa0556a5d99186949b7b73dc06daf887.json
 │   │
 │   ├───chunks
 │   │   ├───arxiv_2205.14135v1
@@ -131,6 +136,8 @@
 │   │           index_runner.py
 │   │           parent_store.py
 │   │           qdrant_index.py
+│   │           reranker.py
+│   │           rerank_runner.py
 │   │           __init__.py
 │   │
 │   └───ira.egg-info
@@ -145,6 +152,7 @@
         test_chunker.py
         test_contracts.py
         test_embedder.py
+        test_eval_reranker_dod.py
         test_health.py
         test_hybrid_retriever.py
         test_normalize.py
@@ -153,3 +161,4 @@
         test_parse_pdf_to_md.py
         test_processor.py
         test_qdrant_index.py
+        test_reranker.py
