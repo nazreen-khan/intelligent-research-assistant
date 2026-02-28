@@ -9,9 +9,8 @@ from rich import print as rprint
 from rich.console import Console
 from rich.table import Table
 
-from ira.ingest.chunk_runner import chunk_all
-from ira.ingest.processor import process_all
-from ira.ingest.runner import run_ingest
+# Ingest imports are lazy (inside each command) so retrieval commands
+# never import llama_index / LlamaParse at startup.
 from ira.settings import settings
 
 console = Console()
@@ -20,10 +19,10 @@ app = typer.Typer(help="Intelligent Research Assistant CLI (ingest/index/query/e
 
 # ── Sub-command groups ────────────────────────────────────────────────────────
 ingest_app = typer.Typer(no_args_is_help=True, help="Ingest pipeline: fetch/process/chunk")
-index_app  = typer.Typer(no_args_is_help=True, help="Indexes: dense (Qdrant) + keyword (BM25)")
+index_app  = typer.Typer(no_args_is_help=True, help="Indexes: dense (Qdrant) + keyword (BM25) + hybrid")
 
 app.add_typer(ingest_app, name="ingest")
-app.add_typer(index_app, name="index")
+app.add_typer(index_app,  name="index")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -37,6 +36,7 @@ def ingest_fetch(
     limit: int = typer.Option(0, "--limit", help="0 = no limit"),
 ):
     """Fetch raw documents from arXiv/docs/GitHub into data/raw/."""
+    from ira.ingest.runner import run_ingest  # lazy — avoids llama_index at startup
     data_dir = Path(settings.IRA_DATA_DIR)
     manifest = data_dir / "provenance" / "manifest.jsonl"
     run_ingest(
@@ -60,6 +60,7 @@ def process_cmd(
     keep_pdf_page_breaks: bool = typer.Option(True, "--keep-pdf-page-breaks/--no-keep-pdf-page-breaks"),
 ):
     """Parse raw documents into cleaned Markdown in data/processed/."""
+    from ira.ingest.processor import process_all  # lazy
     results = process_all(
         raw_root=raw,
         out_root=out,
@@ -68,7 +69,7 @@ def process_cmd(
         only_kind=only_kind,
         keep_pdf_page_breaks=keep_pdf_page_breaks,
     )
-    ok = sum(1 for r in results if r.ok)
+    ok   = sum(1 for r in results if r.ok)
     fail = sum(1 for r in results if not r.ok)
     typer.echo(f"Processed: {len(results)} | ok={ok} fail={fail}")
     if fail:
@@ -85,11 +86,12 @@ def chunk_cmd(
     limit: int | None = typer.Option(None, "--limit"),
 ):
     """Split processed documents into parent/child chunks in data/chunks/."""
+    from ira.ingest.chunk_runner import chunk_all  # lazy
     results = chunk_all(processed_root=processed, out_root=out, force=force, limit=limit)
-    ok = sum(1 for r in results if r.ok)
+    ok   = sum(1 for r in results if r.ok)
     fail = sum(1 for r in results if not r.ok)
-    total_parents = sum(r.parent_count for r in results if r.ok)
-    total_children = sum(r.child_count for r in results if r.ok)
+    total_parents  = sum(r.parent_count for r in results if r.ok)
+    total_children = sum(r.child_count  for r in results if r.ok)
     typer.echo(f"Chunked: {len(results)} docs | ok={ok} fail={fail}")
     typer.echo(f"Total parents={total_parents} | Total children={total_children}")
     if fail:
@@ -104,11 +106,11 @@ def chunk_cmd(
 
 @index_app.command("build")
 def index_build(
-    chunks: Path = typer.Option(Path("data/chunks"), "--chunks", help="Chunks root directory"),
-    doc_id: Optional[str] = typer.Option(None, "--doc-id", help="Only index this specific doc_id"),
-    embed_batch: int = typer.Option(settings.EMBED_BATCH_SIZE, "--embed-batch", help="Embedding batch size"),
-    upsert_batch: int = typer.Option(256, "--upsert-batch", help="Qdrant upsert batch size"),
-    force_reindex: bool = typer.Option(False, "--force-reindex", help="Delete and rebuild collection from scratch"),
+    chunks: Path = typer.Option(Path("data/chunks"), "--chunks"),
+    doc_id: Optional[str] = typer.Option(None, "--doc-id"),
+    embed_batch: int = typer.Option(settings.EMBED_BATCH_SIZE, "--embed-batch"),
+    upsert_batch: int = typer.Option(256, "--upsert-batch"),
+    force_reindex: bool = typer.Option(False, "--force-reindex"),
 ):
     """
     Build or update the Qdrant dense vector index from data/chunks/.
@@ -438,6 +440,168 @@ def bm25_info():
         rprint(f"    → [cyan]{tokenize(s)}[/cyan]")
 
     idx.close()
+
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INDEX COMMANDS — Hybrid Retriever  (Day 7)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@index_app.command("hybrid-query")
+def hybrid_query(
+    q: str = typer.Option(..., "--q", help="Query text"),
+    top_k: int = typer.Option(5, "--top-k", help="Final EvidencePacks to return"),
+    dense_n: int = typer.Option(20, "--dense-n", help="Candidates from dense index"),
+    bm25_n: int = typer.Option(20, "--bm25-n", help="Candidates from BM25 index"),
+    show_parent: bool = typer.Option(False, "--show-parent", help="Print full parent text"),
+    dense_only: bool = typer.Option(False, "--dense-only", help="Skip BM25 (ablation)"),
+    bm25_only: bool = typer.Option(False, "--bm25-only", help="Skip dense (ablation)"),
+    debug: bool = typer.Option(False, "--debug", help="Show full fusion debug table"),
+    json_output: bool = typer.Option(False, "--json", help="Output raw JSON"),
+):
+    """
+    Hybrid retrieval: Dense + BM25 → RRF fusion → Parent context expansion.
+
+    Returns top-K EvidencePacks each containing the matched child chunk
+    and its full parent section (~1500 tokens).
+
+    Examples:
+        uv run python -m ira index hybrid-query --q "FlashAttention IO-awareness"
+        uv run python -m ira index hybrid-query --q "FP8 quantization H100" --debug
+        uv run python -m ira index hybrid-query --q "FlashAttention-2" --show-parent
+        uv run python -m ira index hybrid-query --q "attention memory" --dense-only
+        uv run python -m ira index hybrid-query --q "FP8 H100" --bm25-only
+    """
+    from ira.retrieval.hybrid_retriever import get_hybrid_retriever
+    from ira.settings import settings
+
+    chunks_root = settings.data_dir / "chunks"
+    retriever = get_hybrid_retriever(chunks_root=chunks_root)
+
+    rprint(f"\n[bold cyan]Hybrid Query:[/bold cyan] {q!r}")
+    rprint(f"  Mode   : [green]{'dense-only' if dense_only else 'bm25-only' if bm25_only else 'hybrid (Dense + BM25 → RRF)'}[/green]")
+    rprint(f"  Top-K  : [green]{top_k}[/green]  Dense-N: [green]{dense_n}[/green]  BM25-N: [green]{bm25_n}[/green]\n")
+
+    result = retriever.retrieve(
+        query=q,
+        top_k=top_k,
+        dense_n=dense_n,
+        bm25_n=bm25_n,
+        dense_only=dense_only,
+        bm25_only=bm25_only,
+    )
+
+    if json_output:
+        import dataclasses
+        def _to_dict(obj):
+            if dataclasses.is_dataclass(obj):
+                return dataclasses.asdict(obj)
+            return obj
+        output = {
+            "query": result.query,
+            "evidence_packs": [dataclasses.asdict(p) for p in result.evidence_packs],
+            "confidence": dataclasses.asdict(result.confidence),
+            "debug": result.debug,
+        }
+        typer.echo(json.dumps(output, indent=2, ensure_ascii=False))
+        retriever.close()
+        return
+
+    if not result.evidence_packs:
+        rprint("[yellow]No results found.[/yellow]")
+        retriever.close()
+        return
+
+    # ── Confidence panel ──────────────────────────────────────────────────────
+    c = result.confidence
+    agree_str  = "[green]✓ yes[/green]" if c.both_sources_agree else "[yellow]no[/yellow]"
+    rprint("[bold]Confidence Signals[/bold]")
+    rprint(f"  Top RRF score    : [cyan]{c.top_rrf_score:.6f}[/cyan]")
+    rprint(f"  Score gap (#1-#2): [cyan]{c.score_gap:.6f}[/cyan]")
+    rprint(f"  Keyword coverage : [cyan]{c.keyword_coverage:.1%}[/cyan]")
+    rprint(f"  Both sources agree: {agree_str}")
+    rprint(f"  Sources → dense-only={c.dense_contributed} bm25-only={c.bm25_contributed} both={c.both_contributed}\n")
+
+    # ── Results table ─────────────────────────────────────────────────────────
+    table = Table(title=f"Top-{top_k} Evidence Packs", show_lines=True)
+    table.add_column("#",           justify="right", style="dim", width=3)
+    table.add_column("RRF",         justify="right", width=9)
+    table.add_column("Dense",       justify="right", width=6)
+    table.add_column("BM25",        justify="right", width=6)
+    table.add_column("D↑/B↑",       justify="center", width=7)
+                    #  header="Dense\nRank / BM25\nRank")
+    table.add_column("Doc ID",      style="cyan", max_width=30)
+    table.add_column("Section",     max_width=35)
+    table.add_column("Flags",       width=5)
+    table.add_column("Child text preview", max_width=55)
+
+    for p in result.evidence_packs:
+        flags  = ("💻" if p.is_code else "") + ("📊" if p.is_table else "")
+        flags += ("⭐" if p.in_both else "")
+        d_rank = str(p.dense_rank) if p.dense_rank else "—"
+        b_rank = str(p.bm25_rank)  if p.bm25_rank  else "—"
+        table.add_row(
+            str(p.final_rank),
+            f"{p.rrf_score:.6f}",
+            f"{p.dense_score:.3f}",
+            f"{p.bm25_score:.1f}",
+            f"{d_rank}/{b_rank}",
+            p.doc_id,
+            p.section,
+            flags,
+            p.child_text[:200],
+        )
+
+    console.print(table)
+
+    # ── Parent text (if requested) ────────────────────────────────────────────
+    if show_parent:
+        rprint("\n[bold cyan]Parent Sections[/bold cyan]")
+        for p in result.evidence_packs:
+            rprint(f"\n[bold]#{p.final_rank} — {p.section}[/bold] [dim]({p.doc_id})[/dim]")
+            rprint(f"[dim]parent_id: {p.parent_id}[/dim]")
+            if p.parent_text:
+                # Show first 800 chars of parent
+                preview = p.parent_text[:800]
+                if len(p.parent_text) > 800:
+                    preview += "\n[dim]…[/dim]"
+                rprint(preview)
+            else:
+                rprint("[yellow]  (parent text not available)[/yellow]")
+
+    # ── Debug fusion table ────────────────────────────────────────────────────
+    if debug:
+        rprint("\n[bold cyan]Fusion Debug — All Candidates[/bold cyan]")
+        d_table = Table(show_lines=False, show_header=True)
+        d_table.add_column("Rank", justify="right", width=4)
+        d_table.add_column("RRF Score",   justify="right", width=10)
+        d_table.add_column("Dense↑",      justify="right", width=7)
+        d_table.add_column("BM25↑",       justify="right", width=6)
+        d_table.add_column("Both?",       justify="center", width=5)
+        d_table.add_column("Doc ID",      style="cyan", max_width=32)
+        d_table.add_column("Section",     max_width=35)
+
+        for c in result.debug.get("all_candidates", []):
+            both_str = "⭐" if c["in_both"] else ""
+            d_table.add_row(
+                str(c["rank"]),
+                f"{c['rrf_score']:.6f}",
+                str(c["dense_rank"]) if c["dense_rank"] else "—",
+                str(c["bm25_rank"])  if c["bm25_rank"]  else "—",
+                both_str,
+                c["doc_id"],
+                c["section"],
+            )
+        console.print(d_table)
+
+        rprint(f"\n[dim]Dense fetched={result.debug['dense_n_fetched']} "
+               f"BM25 fetched={result.debug['bm25_n_fetched']} "
+               f"Fused total={result.debug['fused_total']} "
+               f"After parent-dedup={result.debug['after_dedup']} "
+               f"Final={result.debug['final_k']}[/dim]")
+
+    retriever.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

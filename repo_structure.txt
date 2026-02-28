@@ -9,6 +9,9 @@
 │   uv.lock
 │
 ├───data
+│   ├───bm25
+│   │       bm25_index.db
+│   │
 │   ├───cache
 │   │   └───embeddings
 │   │       └───BAAI_bge-small-en-v1.5
@@ -121,8 +124,12 @@
 │   │   │       __init__.py
 │   │   │
 │   │   └───retrieval
+│   │           bm25_index.py
+│   │           bm25_runner.py
 │   │           embedder.py
+│   │           hybrid_retriever.py
 │   │           index_runner.py
+│   │           parent_store.py
 │   │           qdrant_index.py
 │   │           __init__.py
 │   │
@@ -134,10 +141,12 @@
 │           top_level.txt
 │
 └───tests
+        test_bm25_index.py
         test_chunker.py
         test_contracts.py
         test_embedder.py
         test_health.py
+        test_hybrid_retriever.py
         test_normalize.py
         test_parse_code_snippets.py
         test_parse_html_to_md.py
