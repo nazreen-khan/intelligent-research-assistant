@@ -21,7 +21,10 @@ dependencies = [
   "pytesseract>=0.3.13",
   "opencv-python>=4.13.0.92",
   "llama-parse>=0.6.94",
-  "llama-index>=0.9.48",
+  # "llama-index>=0.9.48" REMOVED — this is the old monolithic package.
+  # It conflicts with llama-index-core>=0.10.x by pinning an older core
+  # that moves ChatMessage, breaking llama-parse at import time.
+  # llama-index-core>=0.10.1 below is the correct modern replacement.
   "nest-asyncio>=1.6.0",
   "setuptools<82",
   "llama-index-core>=0.10.1",
