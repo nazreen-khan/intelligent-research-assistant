@@ -4,6 +4,40 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 
+# ── Day 12: Citation models ───────────────────────────────────────────────────
+
+class CitationRecord(BaseModel):
+    """
+    Structured citation built from one evidence pack.
+    Used internally by citation_mapper — serialised to plain dicts for AgentState.
+    """
+    citation_id: str                                      # "1", "2", "3" ...
+    chunk_id: str                                         # UUID from the index
+    doc_id: str                                           # e.g. "arxiv_2205.14135v1"
+    doc_title: str                                        # full document title
+    url: Optional[str] = None                             # canonical source URL
+    section: str = "N/A"                                  # section heading from chunk metadata
+    source_type: Literal["internal", "web"] = "internal"
+    footnote_label: str = ""                              # "[N] Title — Section (url)"
+    position: int = 0                                     # 1-based position in evidence list
+
+
+class CitationValidationResult(BaseModel):
+    """
+    Structural citation audit produced by citation_mapper.validate().
+    Checks: orphan IDs, citation density. Never blocks the response.
+    """
+    passed: bool
+    total_citations: int = 0              # unique [N] markers found in answer
+    valid_citations: int = 0              # [N] that map to a real CitationRecord
+    orphan_ids: list[str] = Field(default_factory=list)          # [N] with no CitationRecord
+    unused_citation_ids: list[str] = Field(default_factory=list) # records never referenced in answer
+    density_ok: bool = True
+    density_score: float = 1.0            # cited_sources / total_sources (0.0-1.0)
+    min_density_threshold: float = 0.4   # default 40%
+    issues: list[str] = Field(default_factory=list)
+
+
 # ── Day 11: Self-check models ─────────────────────────────────────────────────
 
 class CitationIssue(BaseModel):
@@ -30,7 +64,7 @@ class SelfCheckResult(BaseModel):
     citation_issues: list[CitationIssue] = Field(default_factory=list)
     uncited_sentences: int = 0     # factual sentences with no [N] marker
     numeric_failures: int = 0      # numbers in claims absent from cited text
-    coverage_score: float = 1.0    # 0.0–1.0; fraction of checks that passed
+    coverage_score: float = 1.0    # 0.0-1.0; fraction of checks that passed
 
 
 class QueryRequest(BaseModel):
@@ -71,10 +105,18 @@ class AgentTraceStep(BaseModel):
 
 class AnswerResponse(BaseModel):
     request_id: str
-    final_answer: str
+    answer_markdown: str                                              # Day 12: renamed from final_answer
     citations: list[Citation] = Field(default_factory=list)
+    used_sources: list[EvidenceChunk] = Field(default_factory=list)  # Day 12: cited subset of evidence
     evidence: list[EvidenceChunk] = Field(default_factory=list)
+    citation_validation: Optional[CitationValidationResult] = None   # Day 12: structural audit
+    citation_density: float = 0.0                                     # Day 12: cited/retrieved ratio
     trace: list[AgentTraceStep] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
-    self_check: Optional[SelfCheckResult] = None   # Day 11: populated by self_check node
-    schema_version: int = 1
+    self_check: Optional[SelfCheckResult] = None
+    schema_version: int = 2                                           # Day 12: bumped from 1
+
+    @property
+    def final_answer(self) -> str:
+        """Backward-compat alias — code using .final_answer still works."""
+        return self.answer_markdown

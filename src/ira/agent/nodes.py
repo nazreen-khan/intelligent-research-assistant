@@ -25,9 +25,9 @@ Patterns followed (same as rest of codebase):
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any
-import re
 
 from ira.agent.state import AgentState
 from ira.agent import llm as llm_module
@@ -445,16 +445,10 @@ def synthesize_answer(state: AgentState) -> dict:
         },
     )
 
-    # Build citations — tag web sources clearly in the label
-    citations: list[dict[str, Any]] = []
-    for i, pack in enumerate(packs, 1):
-        source_tag = " [WEB]" if pack.get("source_type") == "web" else ""
-        citations.append({
-            "citation_id": str(i),
-            "chunk_id":    pack["chunk_id"],
-            "label":       f"[{i}]{source_tag} {pack['title']} — {pack.get('section') or 'N/A'}",
-            "url":         pack.get("url"),
-        })
+    # Build citations via citation_mapper — single source of truth for footnote format
+    from ira.agent.citation_mapper import build_citations, citation_records_to_state_dicts
+    citation_records = build_citations(packs)
+    citations = citation_records_to_state_dicts(citation_records)
 
     return {
         "answer_draft": answer_draft,
@@ -693,9 +687,9 @@ def self_check(state: AgentState) -> dict[str, Any]:
                     checks_run += 1
                     # Strip modifiers to get the bare number for source lookup.
                     # e.g. "3x" → "3", "75%" → "75", "128 tokens" → "128"
-                    num_core = re.sub(
+                    num_core = _re.sub(
                         r"\s?(?:x|%|billion|million|trillion|GB|MB|KB|ms|tokens?)$",
-                        "", num.strip(), flags=re.IGNORECASE
+                        "", num.strip(), flags=_re.IGNORECASE
                     ).strip()
 
                     if num_core and num_core not in source_text:

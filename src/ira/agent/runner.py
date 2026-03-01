@@ -26,11 +26,17 @@ import uuid
 
 from ira.agent.graph import get_graph
 from ira.agent.state import AgentState, make_initial_state
+from ira.agent.citation_mapper import (
+    CitationRecord,
+    get_used_citations,
+    validate as validate_citations,
+)
 from ira.contracts.schemas import (
     AgentTraceStep,
     AnswerResponse,
     Citation,
     CitationIssue,
+    CitationValidationResult,
     EvidenceChunk,
     QueryRequest,
     SelfCheckResult,
@@ -83,7 +89,7 @@ def run_agent(
         )
         return AnswerResponse(
             request_id=rid,
-            final_answer=f"Query blocked: {policy.reason}",
+            answer_markdown=f"Query blocked: {policy.reason}",
             citations=[],
             evidence=[],
             trace=[
@@ -114,7 +120,7 @@ def run_agent(
         logger.error("graph.invoke failed: %s", exc, exc_info=True)
         return AnswerResponse(
             request_id=rid,
-            final_answer=f"Agent error: {exc}",
+            answer_markdown=f"Agent error: {exc}",
             citations=[],
             evidence=[],
             trace=[
@@ -169,80 +175,95 @@ def _build_response(
     state: AgentState,
     t_start: float,
 ) -> AnswerResponse:
-    """Map final AgentState fields to AnswerResponse schema."""
+    """Map final AgentState fields to AnswerResponse schema (Day 12 updated)."""
 
-    # ── Citations ─────────────────────────────────────────────────────────
+    answer_text = state.get("answer_draft", "")
+    warnings    = list(state.get("warnings", []))
+
+    # ── Citations: reconstruct CitationRecord objects from state dicts ────────
+    # State stores plain dicts (LangGraph requirement); we rebuild typed records here.
+    raw_citation_dicts = state.get("citations", [])
+    citation_records: list[CitationRecord] = []
+    for c in raw_citation_dicts:
+        try:
+            citation_records.append(CitationRecord(**c))
+        except Exception as exc:
+            logger.warning("Skipping malformed citation dict: %s — %s", c, exc)
+
+    # Build the Citation Pydantic list (used in AnswerResponse.citations)
+    # We use the CitationRecord's footnote_label as the label field.
     citations = [
         Citation(
-            citation_id=c["citation_id"],
-            chunk_id=c["chunk_id"],
-            label=c["label"],
-            url=c.get("url"),
+            citation_id = r.citation_id,
+            chunk_id    = r.chunk_id,
+            label       = r.footnote_label or f"[{r.citation_id}] {r.doc_title}",
+            url         = r.url,
         )
-        for c in state.get("citations", [])
+        for r in citation_records
     ]
 
-    # ── Evidence chunks (child_text for concise display) ──────────────────
+    # ── Evidence chunks (child_text for concise display) ──────────────────────
     evidence = [
         EvidenceChunk(
-            chunk_id=p["chunk_id"],
-            doc_id=p["doc_id"],
-            title=p["title"],
-            source_type="internal",
-            url=p.get("url"),
-            section=p.get("section"),
-            text=p.get("child_text", ""),
-            score=float(p.get("reranker_score") or p.get("rrf_score") or 0.0),
+            chunk_id    = p["chunk_id"],
+            doc_id      = p["doc_id"],
+            title       = p.get("title", p.get("doc_id", "Unknown")),
+            source_type = p.get("source_type", "internal"),
+            url         = p.get("url"),
+            section     = p.get("section"),
+            text        = p.get("child_text", ""),
+            score       = float(p.get("reranker_score") or p.get("rrf_score") or 0.0),
         )
         for p in state.get("evidence_packs", [])
     ]
 
-    # ── Trace ─────────────────────────────────────────────────────────────
-    # Step 1: intent classification result
-    # Step 2: context grade result
-    # Step 3+: one entry per tool_call
+    # ── used_sources: evidence chunks that were actually cited in the answer ──
+    used_chunk_ids = {r.chunk_id for r in get_used_citations(answer_text, citation_records)}
+    used_sources   = [e for e in evidence if e.chunk_id in used_chunk_ids]
+
+    # ── Citation validation: structural integrity check ───────────────────────
+    citation_validation = validate_citations(answer_text, citation_records)
+    if not citation_validation.passed:
+        for issue in citation_validation.issues:
+            warnings.append(f"citation_validator: {issue}")
+
+    citation_density = citation_validation.density_score
+
+    # ── Trace ─────────────────────────────────────────────────────────────────
     trace: list[AgentTraceStep] = [
         AgentTraceStep(
-            step=1,
-            node="analyze_intent",
-            status="ok",
-            latency_ms=0,
+            step=1, node="analyze_intent", status="ok", latency_ms=0,
             detail={"intent": state.get("intent", "?")},
         ),
         AgentTraceStep(
-            step=2,
-            node="grade_context",
-            status="ok",
-            latency_ms=0,
+            step=2, node="grade_context", status="ok", latency_ms=0,
             detail={
-                "grade": state.get("context_grade", "?"),
+                "grade":   state.get("context_grade", "?"),
                 "retries": state.get("retries", 0),
             },
         ),
     ]
-
     for i, tc in enumerate(state.get("tool_calls", []), start=3):
-        trace.append(
-            AgentTraceStep(
-                step=i,
-                node=tc["tool"],
-                status="ok",
-                latency_ms=tc.get("ms", 0),
-                detail={
-                    "input": tc.get("input", "")[:120],
-                    "result_count": tc.get("result_count", 0),
-                },
-            )
-        )
+        trace.append(AgentTraceStep(
+            step=i, node=tc["tool"], status="ok",
+            latency_ms=tc.get("ms", 0),
+            detail={
+                "input":        tc.get("input", "")[:120],
+                "result_count": tc.get("result_count", 0),
+            },
+        ))
 
     return AnswerResponse(
-        request_id=request_id,
-        final_answer=state.get("answer_draft", ""),
-        citations=citations,
-        evidence=evidence,
-        trace=trace,
-        warnings=state.get("warnings", []),
-        self_check=_build_self_check_result(state.get("self_check_result", {})),
+        request_id          = request_id,
+        answer_markdown     = answer_text,
+        citations           = citations,
+        used_sources        = used_sources,
+        evidence            = evidence,
+        citation_validation = citation_validation,
+        citation_density    = citation_density,
+        trace               = trace,
+        warnings            = warnings,
+        self_check          = _build_self_check_result(state.get("self_check_result", {})),
     )
 
 
