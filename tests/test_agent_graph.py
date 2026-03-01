@@ -227,8 +227,10 @@ class TestWebFallback:
             state = make_initial_state("latest benchmark query", "req-web-001", use_web=True)
             final = build_graph().invoke(state)
 
-        # Web stub warning should be present
-        assert any("web" in w.lower() or "stub" in w.lower() for w in final["warnings"])
+        # Web search ran — mock provider returns evidence packs
+        assert len(final["evidence_packs"]) > 0
+        tool_names = [tc["tool"] for tc in final["tool_calls"]]
+        assert any("search_web" in name for name in tool_names)
         assert final["answer_draft"] != ""
 
     def test_web_tool_call_appears_in_trace(self):
@@ -265,7 +267,8 @@ class TestWebIntent:
         # retrieve_internal should never have been called
         mock_rerank.assert_not_called()
         assert final["intent"] == "web"
-        assert any("web" in w.lower() or "stub" in w.lower() for w in final["warnings"])
+        # Real search_web with mock provider returns evidence packs, no stub warning
+        assert len(final["evidence_packs"]) > 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────

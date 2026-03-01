@@ -9,7 +9,7 @@ Node responsibilities:
   analyze_intent   → set intent ("internal" | "web" | "hybrid")
   route            → pure routing — no state change (returns {})
   retrieve_internal→ call hybrid retriever + reranker, populate evidence_packs
-  search_web       → stub (Day 10); appends warning, returns empty packs
+  search_web       → call web search tool, append results to evidence_packs
   grade_context    → set context_grade ("strong" | "weak" | "empty")
   decompose_query  → LLM call: break query into sub-questions, increment retries
   synthesize_answer→ LLM call: generate answer + citations from evidence
@@ -50,16 +50,17 @@ def _tool_entry(tool: str, input_: str, result_count: int, ms: int) -> dict[str,
 def _pack_to_dict(pack: Any) -> dict[str, Any]:
     """Convert an EvidencePack object to a plain dict for state storage."""
     return {
-        "chunk_id": pack.chunk_id,
-        "doc_id": pack.doc_id,
-        "title": pack.title,
-        "url": pack.url,
-        "section": pack.section,
-        "child_text": pack.child_text,
-        "parent_text": pack.parent_text,
-        "rrf_score": pack.rrf_score,
+        "chunk_id":       pack.chunk_id,
+        "doc_id":         pack.doc_id,
+        "title":          pack.title,
+        "url":            pack.url,
+        "section":        pack.section,
+        "child_text":     pack.child_text,
+        "parent_text":    pack.parent_text,
+        "rrf_score":      pack.rrf_score,
         "reranker_score": pack.reranker_score,
-        "in_both": pack.in_both,
+        "in_both":        pack.in_both,
+        "source_type":    "internal",
     }
 
 
@@ -88,8 +89,9 @@ def _format_evidence_for_llm(evidence_packs: list[dict[str, Any]]) -> str:
     blocks: list[str] = []
     for i, pack in enumerate(evidence_packs, 1):
         section = pack.get("section") or "—"
+        source_tag = f" [{pack.get('source_type', 'internal').upper()}]"
         blocks.append(
-            f"[{i}] Source: {pack['title']} | Section: {section}\n"
+            f"[{i}]{source_tag} Source: {pack['title']} | Section: {section}\n"
             f"URL: {pack.get('url', 'N/A')}\n"
             f"chunk_id: {pack['chunk_id']}\n\n"
             f"{pack['parent_text']}"
@@ -153,7 +155,7 @@ def route(state: AgentState) -> dict:
         "route",
         extra={"request_id": state["request_id"], "intent": state["intent"]},
     )
-    return {}  # no state change — graph.py's conditional edge does the routing
+    return {}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -168,7 +170,6 @@ def retrieve_internal(state: AgentState) -> dict:
     """
     from ira.retrieval.rerank_runner import query_with_rerank  # lazy import
 
-    # Use subqueries if decompose_query has run, otherwise use original query
     queries_to_run: list[str] = state["subqueries"] if state["subqueries"] else [state["query"]]
 
     new_packs: list[dict[str, Any]] = []
@@ -208,33 +209,77 @@ def retrieve_internal(state: AgentState) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Node 4: search_web
+# Node 4: search_web  (Day 10 — real implementation)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def search_web(state: AgentState) -> dict:
     """
-    Web search — STUB for Day 9. Real implementation in Day 10 (Tavily/Exa).
+    Call the web search tool and append results to evidence_packs.
 
-    Currently: appends a warning and returns no new evidence so the agent
-    degrades gracefully to synthesizing from internal evidence only.
-    The graph shape is correct and testable today.
+    Uses WEB_SEARCH_PROVIDER from settings:
+      "mock"   — loads fixtures, no API key needed (default, CI-safe)
+      "tavily" — Tavily Search API
+      "exa"    — Exa Search API
+
+    Web results are converted to evidence_pack dicts (source_type="web")
+    and deduped by chunk_id before merging — synthesize_answer handles
+    them identically to internal packs.
     """
+    from ira.agent.web_search_tool import search_web_tool, web_results_to_evidence_packs  # lazy
+
+    query = state["query"]
     t0 = time.time()
+
     logger.info(
-        "search_web (stub)",
-        extra={"request_id": state["request_id"], "query": state["query"]},
+        "search_web",
+        extra={
+            "request_id": state["request_id"],
+            "query": query[:80],
+            "provider": settings.WEB_SEARCH_PROVIDER,
+        },
     )
 
-    warning = (
-        "Web search is not yet available (Day 10). "
-        "Answer is based on internal corpus only."
+    warnings = list(state["warnings"])
+
+    try:
+        web_results = search_web_tool(
+            query=query,
+            max_results=settings.WEB_SEARCH_MAX_RESULTS,
+        )
+    except Exception as exc:
+        logger.error("search_web error: %s", exc, exc_info=True)
+        warnings.append(f"Web search failed: {exc}")
+        return {
+            "tool_calls": state["tool_calls"] + [
+                _tool_entry("search_web", query, 0, _ms(t0))
+            ],
+            "warnings": warnings,
+        }
+
+    if not web_results:
+        warnings.append(f"Web search returned no results for: {query[:80]}")
+
+    # Convert to evidence_pack dicts and merge
+    new_packs = web_results_to_evidence_packs(web_results)
+    merged = _dedup_packs(state["evidence_packs"], new_packs)
+
+    elapsed = _ms(t0)
+    logger.info(
+        "search_web complete",
+        extra={
+            "request_id": state["request_id"],
+            "results": len(web_results),
+            "provider": settings.WEB_SEARCH_PROVIDER,
+            "ms": elapsed,
+        },
     )
 
     return {
+        "evidence_packs": merged,
         "tool_calls": state["tool_calls"] + [
-            _tool_entry("search_web_stub", state["query"], 0, _ms(t0))
+            _tool_entry("search_web", query, len(web_results), elapsed)
         ],
-        "warnings": state["warnings"] + [warning],
+        "warnings": warnings,
     }
 
 
@@ -251,8 +296,6 @@ def grade_context(state: AgentState) -> dict:
       "weak"   → fewer than AGENT_MIN_EVIDENCE_PACKS, OR
                  top reranker_score < AGENT_WEAK_SCORE_THRESHOLD
       "strong" → everything else
-
-    The conditional edge in graph.py routes on this value.
     """
     packs = state["evidence_packs"]
 
@@ -313,7 +356,6 @@ def decompose_query(state: AgentState) -> dict:
             temperature=0.2,
         ).strip()
 
-        # Safe parse — eval only if it looks like a list literal
         import ast
         subqueries: list[str] = ast.literal_eval(raw)
         if not isinstance(subqueries, list) or not subqueries:
@@ -326,10 +368,7 @@ def decompose_query(state: AgentState) -> dict:
 
     logger.info(
         "subqueries",
-        extra={
-            "request_id": state["request_id"],
-            "subqueries": subqueries,
-        },
+        extra={"request_id": state["request_id"], "subqueries": subqueries},
     )
     return {
         "subqueries": subqueries,
@@ -369,16 +408,13 @@ def synthesize_answer(state: AgentState) -> dict:
         warnings.append("No evidence packs available for synthesis.")
         return {"answer_draft": answer, "citations": [], "warnings": warnings}
 
-    # ── Warn if we're synthesizing from weak context ──────────────────────
     if state["context_grade"] in ("weak", "empty"):
         warnings.append(
             f"Context grade was '{state['context_grade']}' after "
             f"{state['retries']} retry(ies). Answer may be incomplete."
         )
 
-    # ── Build evidence context for prompt ─────────────────────────────────
     evidence_text = _format_evidence_for_llm(packs)
-
     prompt = (
         f"Question: {query}\n\n"
         f"Evidence:\n{evidence_text}\n\n"
@@ -406,18 +442,19 @@ def synthesize_answer(state: AgentState) -> dict:
         },
     )
 
-    # ── Build citations list ───────────────────────────────────────────────
+    # Build citations — tag web sources clearly in the label
     citations: list[dict[str, Any]] = []
     for i, pack in enumerate(packs, 1):
+        source_tag = " [WEB]" if pack.get("source_type") == "web" else ""
         citations.append({
             "citation_id": str(i),
-            "chunk_id": pack["chunk_id"],
-            "label": f"[{i}] {pack['title']} — {pack.get('section') or 'N/A'}",
-            "url": pack.get("url"),
+            "chunk_id":    pack["chunk_id"],
+            "label":       f"[{i}]{source_tag} {pack['title']} — {pack.get('section') or 'N/A'}",
+            "url":         pack.get("url"),
         })
 
     return {
         "answer_draft": answer_draft,
-        "citations": citations,
-        "warnings": warnings,
+        "citations":    citations,
+        "warnings":     warnings,
     }
