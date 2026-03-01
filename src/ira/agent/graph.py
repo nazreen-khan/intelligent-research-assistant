@@ -15,7 +15,8 @@ Graph topology:
                               ├─► search_web          (grade == "weak" AND use_web AND retries >= max)
                               │     └─► synthesize_answer
                               └─► synthesize_answer   (grade == "empty" OR retries >= max)
-                                    └─► END
+                                    └─► self_check    (Day 11 — ALL paths go through self_check)
+                                          └─► END
 
 Key design decisions:
   - route() node is a no-op; conditional edge reads state["intent"] directly.
@@ -23,6 +24,7 @@ Key design decisions:
   - MAX_RETRIES guard prevents infinite decompose→retrieve cycles.
   - search_web is always available as a fallback even when intent=="internal"
     if use_web=True and context stays weak after max retries.
+  - self_check (Day 11) sits between synthesize_answer and END on all paths.
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ from ira.agent.nodes import (
     retrieve_internal,
     route,
     search_web,
+    self_check,
     synthesize_answer,
 )
 from ira.settings import settings
@@ -120,6 +123,7 @@ def build_graph() -> StateGraph:
     builder.add_node("grade_context", grade_context)
     builder.add_node("decompose_query", decompose_query)
     builder.add_node("synthesize_answer", synthesize_answer)
+    builder.add_node("self_check", self_check)   # Day 11
 
     # ── Entry point ───────────────────────────────────────────────────────
     builder.add_edge(START, "analyze_intent")
@@ -159,8 +163,9 @@ def build_graph() -> StateGraph:
         {"synthesize_answer": "synthesize_answer"},
     )
 
-    # ── Terminal node ─────────────────────────────────────────────────────
-    builder.add_edge("synthesize_answer", END)
+    # ── synthesize_answer → self_check → END  (Day 11: all paths verified) ──
+    builder.add_edge("synthesize_answer", "self_check")
+    builder.add_edge("self_check", END)
 
     return builder.compile()
 
