@@ -15,12 +15,25 @@
 │   ├───cache
 │   │   ├───embeddings
 │   │   │   └───BAAI_bge-small-en-v1.5
-│   │   │       └───3c
-│   │   │               3ce0f5ab7c99f4b415bff1bc39643cf9b51354e337116a01682de6699fbb80f5.tmp.npy
+│   │   │       ├───3c
+│   │   │       │       3ce0f5ab7c99f4b415bff1bc39643cf9b51354e337116a01682de6699fbb80f5.tmp.npy
+│   │   │       │
+│   │   │       └───9c
+│   │   │               9c571e73255f826dfda2da53ac69c3c1a6738b1100698523685398a555164b1b.tmp.npy
 │   │   │
-│   │   └───rerank
-│   │       └───2c
-│   │               2c183f60cce222ba885128aba371eba0fa0556a5d99186949b7b73dc06daf887.json
+│   │   ├───rerank
+│   │   │   ├───03
+│   │   │   │       039cedfadcb47f96a8ee355f96548a0843312ee56353396e8d91107d37eab870.json
+│   │   │   │
+│   │   │   └───2c
+│   │   │           2c183f60cce222ba885128aba371eba0fa0556a5d99186949b7b73dc06daf887.json
+│   │   │
+│   │   └───web
+│   │       ├───08
+│   │       │       084d63dd7f56af23682e76ddcfe80920cb05df0a95c2fc143cab960dfd6dce13.json
+│   │       │
+│   │       └───29
+│   │               293901beacc2be88b205e6ad59239286b1a1bd18aaddd0e38d0de09f3f97f355.json
 │   │
 │   ├───chunks
 │   │   ├───arxiv_2205.14135v1
