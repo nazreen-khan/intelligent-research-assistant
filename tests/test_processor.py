@@ -36,7 +36,7 @@ def test_processor_routes_pdf(monkeypatch, tmp_path: Path):
     (d / "meta.json").write_text(json.dumps({"kind": "arxiv", "seed": {"title": "P"}}), encoding="utf-8")
     (d / "paper.pdf").write_bytes(b"%PDF-1.4\n%fake\n")
 
-    monkeypatch.setattr(proc, "parse_pdf_doc", lambda raw_dir, keep_page_breaks=True: ("# P\n\n## 1 Intro\n", {"doc_id": raw_dir.name, "parser": {"name": "parse_pdf_to_md"}}))
+    monkeypatch.setattr(proc, "parse_pdf_doc_v2", lambda raw_dir: ("# P\n\n## 1 Intro\n", {"doc_id": raw_dir.name, "parser": {"name": "parse_pdf_to_md"}}))
 
     res = process_one_doc(d, out_root, force=True)
     assert res.ok is True

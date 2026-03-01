@@ -221,9 +221,11 @@ class QdrantIndex:
         try:
             info = client.get_collection(self.collection_name)
             return {
-                "name": self.collection_name,          # FIX 2: always correct
-                "vectors_count": info.vectors_count,
-                "points_count": info.points_count,
+                "name": self.collection_name,
+                # Use getattr with default 0 — attribute names differ across qdrant_client versions.
+                # vectors_count was removed in qdrant_client >= 1.13; points_count may be None.
+                "vectors_count": getattr(info, "vectors_count", None) or 0,
+                "points_count": getattr(info, "points_count", None) or 0,
                 "status": str(info.status),
                 "vector_dim": self.vector_dim,
                 "mode": self.mode,

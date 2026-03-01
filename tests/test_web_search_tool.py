@@ -346,15 +346,21 @@ class TestSearchWebNode:
         assert result["tool_calls"][0]["result_count"] > 0
 
     def test_deduplicates_against_existing_packs(self):
+        from unittest.mock import patch as _patch
         from ira.agent.nodes import search_web
         from ira.agent.web_search_tool import search_web_tool, web_results_to_evidence_packs
-        # Pre-populate with the same packs that mock will return
-        existing = web_results_to_evidence_packs(
-            search_web_tool("test", provider="mock", use_cache=False)
-        )
+        # Build a fixed set of mock results — same results used for both pre-populate
+        # and the search_web call inside the node, so chunk_ids are identical.
+        fixed_results = search_web_tool("test", provider="mock", use_cache=False)
+        if not fixed_results:
+            pytest.skip("web_mock.jsonl fixture not found — skipping dedup test")
+        existing = web_results_to_evidence_packs(fixed_results)
         state = self._state(evidence_packs=existing)
-        result = search_web(state)
-        # No duplicates added — total should equal existing
+        # Patch at the source module — search_web_tool is lazily imported inside
+        # the search_web function body so "ira.agent.nodes.search_web_tool" does not exist.
+        with _patch("ira.agent.web_search_tool.search_web_tool", return_value=fixed_results):
+            result = search_web(state)
+        # Dedup by chunk_id — same URLs → same chunk_ids → no new packs added
         assert len(result["evidence_packs"]) == len(existing)
 
     def test_preserves_existing_tool_calls(self):

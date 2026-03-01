@@ -135,32 +135,14 @@ class Embedder:
             return
         p = _cache_path(self.cache_dir, self._model_slug, text_sha)
         p.parent.mkdir(parents=True, exist_ok=True)
-        # np.save appends .npy automatically when the path doesn't end in .npy.
-        # We pass a .tmp stem → numpy writes <sha>.tmp.npy
-        # Then rename <sha>.tmp.npy → <sha>.npy
-        tmp_stem = p.with_suffix("").with_name(p.stem + ".tmp")  # <sha>.tmp
-        tmp_actual = tmp_stem.with_suffix(".npy")                 # <sha>.tmp.npy
+        # Write directly to target path — avoids Windows PermissionError from
+        # the tmp-file rename pattern (file-lock timing on Windows file system).
+        # np.save appends .npy automatically if path does not already end in .npy;
+        # since our path already ends in .npy we pass str(p) directly.
         try:
-            np.save(str(tmp_stem), vec)  # numpy writes <sha>.tmp.npy
-            # Retry rename up to 3 times — Windows may hold a brief file lock
-            import time
-            for attempt in range(3):
-                try:
-                    tmp_actual.replace(p)
-                    return  # success — exit immediately
-                except PermissionError:
-                    if attempt < 2:
-                        time.sleep(0.05)  # 50ms wait, then retry
-                    else:
-                        raise
+            np.save(str(p), vec)
         except Exception:
             logger.warning("Cache write failed for %s", p)
-        finally:
-            if tmp_actual.exists():
-                try:
-                    tmp_actual.unlink()
-                except Exception:
-                    pass
 
     # ── Core encode ───────────────────────────────────────────────────────────
 

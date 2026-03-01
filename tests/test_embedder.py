@@ -41,13 +41,13 @@ def _make_mock_model(dim: int = 384) -> MagicMock:
     def fake_encode(texts, **kwargs):
         vecs = []
         for t in texts:
-            sha = hashlib.sha256(t.encode()).digest()
-            # Repeat sha bytes to fill dim floats, then normalize
-            raw = np.frombuffer((sha * ((dim * 4 // len(sha)) + 1))[:dim * 4], dtype=np.float32).copy()
+            # Use first 8 hex chars of sha256 as rng seed — deterministic per text,
+            # avoids float32 overflow that occurs when raw sha bytes are cast directly.
+            seed = int(hashlib.sha256(t.encode()).hexdigest()[:8], 16)
+            rng = np.random.default_rng(seed)
+            raw = rng.standard_normal(dim).astype(np.float32)
             norm = np.linalg.norm(raw)
-            if norm > 0:
-                raw /= norm
-            vecs.append(raw)
+            vecs.append(raw / norm if norm > 0 else raw)
         return np.array(vecs, dtype=np.float32)
 
     mock.encode.side_effect = fake_encode
