@@ -194,31 +194,48 @@ class TestRetrieveInternal:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestSearchWeb:
-
-    def test_appends_stub_warning(self):
-        from ira.agent.nodes import search_web
-        result = search_web(_base_state())
-        assert len(result["warnings"]) == 1
-        assert "stub" in result["warnings"][0].lower() or "not yet" in result["warnings"][0].lower()
+    # Tests updated for Day 10: search_web is now real (uses mock provider by default)
 
     def test_appends_tool_call_entry(self):
         from ira.agent.nodes import search_web
         result = search_web(_base_state())
         assert len(result["tool_calls"]) == 1
-        assert "search_web" in result["tool_calls"][0]["tool"]
+        assert result["tool_calls"][0]["tool"] == "search_web"
 
-    def test_does_not_add_evidence_packs(self):
+    def test_populates_evidence_packs(self):
         from ira.agent.nodes import search_web
-        # search_web stub should not add any evidence packs
+        # Mock provider returns 5 fixture results
         result = search_web(_base_state())
-        assert "evidence_packs" not in result
+        assert "evidence_packs" in result
+        assert len(result["evidence_packs"]) > 0
+
+    def test_evidence_packs_have_web_source_type(self):
+        from ira.agent.nodes import search_web
+        result = search_web(_base_state())
+        for pack in result["evidence_packs"]:
+            assert pack["source_type"] == "web"
 
     def test_preserves_existing_warnings(self):
         from ira.agent.nodes import search_web
         state = _base_state(warnings=["prior warning"])
         result = search_web(state)
         assert "prior warning" in result["warnings"]
-        assert len(result["warnings"]) == 2
+
+    def test_appends_warning_on_empty_results(self):
+        from ira.agent.nodes import search_web
+        from unittest.mock import patch
+        with patch("ira.agent.web_search_tool.search_web_tool", return_value=[]):
+            result = search_web(_base_state())
+        assert any("no results" in w.lower() for w in result["warnings"])
+
+    def test_handles_exception_gracefully(self):
+        from ira.agent.nodes import search_web
+        from unittest.mock import patch
+        with patch("ira.agent.web_search_tool.search_web_tool",
+                   side_effect=RuntimeError("API down")):
+            result = search_web(_base_state())
+        assert result["tool_calls"][0]["result_count"] == 0
+        assert any("failed" in w.lower() for w in result["warnings"])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
