@@ -11,7 +11,7 @@ Field groups:
   ROUTING     — set by analyze_intent, read by route
   RETRIEVAL   — accumulated by retrieve_internal / search_web
   CONTROL     — loop counters and grading signals
-  OUTPUT      — populated by synthesize_answer
+  OUTPUT      — populated by synthesize_answer + self_check (Day 11)
 """
 
 from __future__ import annotations
@@ -70,6 +70,14 @@ class AgentState(TypedDict):
     # Examples: "context grade: weak after 2 retries", "web search stubbed"
     warnings: list[str]
 
+    # ── DAY 11: SELF-CHECK ────────────────────────────────────────────────────
+    # self_check_result: verification summary written by the self_check node.
+    # Shape mirrors SelfCheckResult Pydantic model (plain dict for LangGraph compat):
+    #   passed, checks_run, checks_passed, checks_failed,
+    #   citation_issues, uncited_sentences, numeric_failures, coverage_score
+    # Empty dict {} until self_check node runs.
+    self_check_result: dict[str, Any]
+
 
 def make_initial_state(
     query: str,
@@ -101,4 +109,5 @@ def make_initial_state(
         answer_draft="",
         citations=[],
         warnings=[],
+        self_check_result={},   # Day 11: populated by self_check node
     )

@@ -1,5 +1,5 @@
 """
-agent/nodes.py — All 7 LangGraph node functions.
+agent/nodes.py — All 8 LangGraph node functions.
 
 Each node signature:  (state: AgentState) -> dict
 The returned dict is MERGED into AgentState by LangGraph — only return
@@ -13,6 +13,7 @@ Node responsibilities:
   grade_context    → set context_grade ("strong" | "weak" | "empty")
   decompose_query  → LLM call: break query into sub-questions, increment retries
   synthesize_answer→ LLM call: generate answer + citations from evidence
+  self_check       → Day 11: verify citations + numerics + uncited claims
 
 Patterns followed (same as rest of codebase):
   - Lazy imports for heavy objects
@@ -26,9 +27,11 @@ from __future__ import annotations
 import logging
 import time
 from typing import Any
+import re
 
 from ira.agent.state import AgentState
 from ira.agent import llm as llm_module
+from ira.observability.logging import log_event
 from ira.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -457,4 +460,338 @@ def synthesize_answer(state: AgentState) -> dict:
         "answer_draft": answer_draft,
         "citations":    citations,
         "warnings":     warnings,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Day 11 — self_check node + private helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+import re as _re  # noqa: E402 — module-level but placed here to keep Day 11 self-contained
+
+# Matches sentence boundaries (period/exclamation/question + whitespace)
+_SENTENCE_END_RE = _re.compile(r"(?<=[.!?])\s+")
+
+# Matches [N] inline citation markers
+_CITATION_RE = _re.compile(r"\[(\d+)\]")
+
+# Matches numeric tokens: integers, decimals, percentages, multipliers, SI suffixes
+# e.g.  3   3.5   75%   2x   128GB   12ms   1.4 billion
+# Note: [x%] are NOT word chars so \b cannot follow them — we use a lookahead instead
+_NUMBER_RE = _re.compile(
+    r"\b(\d+(?:\.\d+)?(?:[x%]|(?:\s?(?:billion|million|trillion|GB|MB|KB|ms|tokens?)))?)",
+    _re.IGNORECASE,
+)
+
+# Words too common to carry grounding signal
+_STOP_WORDS: frozenset[str] = frozenset({
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+    "has", "have", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "can", "shall", "and", "or", "but", "nor",
+    "in", "on", "at", "to", "for", "of", "with", "by", "from", "as",
+    "into", "through", "during", "this", "that", "these", "those",
+    "it", "its", "they", "their", "our", "we", "you", "your", "he",
+    "she", "his", "her", "also", "which", "who", "what", "when", "where",
+    "how", "not", "no", "so", "if", "about", "than", "then", "up",
+})
+
+
+def _extract_cited_claims(answer: str) -> list[dict[str, Any]]:
+    """
+    Split answer_draft into sentences and return only those that contain
+    at least one [N] citation marker.
+
+    Returns:
+        list of {"sentence": str, "citation_ids": list[str]}
+    """
+    sentences = _SENTENCE_END_RE.split(answer.strip())
+    results: list[dict[str, Any]] = []
+    for sent in sentences:
+        ids = _CITATION_RE.findall(sent)
+        if ids:
+            results.append({
+                "sentence":     sent.strip(),
+                "citation_ids": list(dict.fromkeys(ids)),  # dedupe, preserve order
+            })
+    return results
+
+
+def _extract_numbers(text: str) -> list[str]:
+    """
+    Return all numeric tokens found in text (as original strings, not floats).
+    e.g. "3x faster" → ["3x"],  "128 GB memory" → ["128 GB"]
+    """
+    return _NUMBER_RE.findall(text)
+
+
+def _is_grounded_in_text(claim: str, source_text: str, threshold: float = 0.30) -> bool:
+    """
+    Keyword-overlap grounding check (deterministic, zero cost, ~microseconds).
+
+    Strips stop-words from the claim, then checks what fraction of the
+    remaining content words appear anywhere in source_text (case-insensitive).
+
+    Args:
+        claim:       A single sentence from answer_draft.
+        source_text: The parent_text (or child_text) of the cited evidence pack.
+        threshold:   Minimum fraction of content words that must match.
+                     Default 0.30 = 30 % of claim's content words.
+
+    Returns:
+        True if grounded (overlap >= threshold) or claim has no content words.
+        False if below threshold.
+    """
+    # Strip citation markers so they don't pollute word set
+    claim_clean = _CITATION_RE.sub("", claim)
+    claim_words = {
+        w.lower().strip(".,;:!?()")
+        for w in claim_clean.split()
+        if w.lower() not in _STOP_WORDS and len(w) > 2
+    }
+
+    if not claim_words:
+        return True  # nothing meaningful to verify
+
+    source_lower = source_text.lower()
+    matched = sum(1 for w in claim_words if w in source_lower)
+    overlap = matched / len(claim_words)
+    return overlap >= threshold
+
+
+def self_check(state: AgentState) -> dict[str, Any]:
+    """
+    Day 11 — Post-synthesis verification node.
+
+    Runs three checks against the answer_draft:
+      1. Citation grounding   — every [N] claim must be supported by evidence_packs[N-1]
+      2. Numeric faithfulness — numbers inside cited claims must appear verbatim in source
+      3. Uncited claim detect — factual sentences without any [N] marker are counted
+
+    Contract:
+      - Reads:  answer_draft, citations, evidence_packs, warnings
+      - Writes: answer_draft (possibly annotated), warnings (appended), self_check_result
+      - NEVER raises — any internal error degrades gracefully:
+          answer_draft returned unchanged, warning appended, passed=False
+
+    Returns dict merged into AgentState by LangGraph.
+    """
+    t0 = time.time()
+
+    answer    = state.get("answer_draft", "")
+    citations = state.get("citations", [])       # list[dict]: citation_id, chunk_id, …
+    packs     = state.get("evidence_packs", [])  # list[dict]: chunk_id, parent_text, …
+    warnings  = list(state.get("warnings", []))
+
+    _SKIP_RESULT: dict[str, Any] = {
+        "passed":           True,
+        "checks_run":       0,
+        "checks_passed":    0,
+        "checks_failed":    0,
+        "citation_issues":  [],
+        "uncited_sentences": 0,
+        "numeric_failures": 0,
+        "coverage_score":   1.0,
+    }
+
+    # ── Early exit: nothing to verify ────────────────────────────────────────
+    if not answer or not packs:
+        log_event(
+            logger,
+            event="self_check.skipped",
+            request_id=state["request_id"],
+            reason="no answer or no evidence_packs",
+        )
+        return {
+            "answer_draft":     answer,
+            "warnings":         warnings,
+            "self_check_result": _SKIP_RESULT,
+        }
+
+    # ── Build lookup tables ───────────────────────────────────────────────────
+    # pack_by_chunk: chunk_id → pack dict
+    pack_by_chunk: dict[str, dict] = {p["chunk_id"]: p for p in packs}
+
+    # pack_by_citation_id: "1" → pack dict  (citation_id is always a string)
+    pack_by_cid: dict[str, dict] = {}
+    for c in citations:
+        cid   = str(c.get("citation_id", ""))
+        chunk = c.get("chunk_id", "")
+        if cid and chunk in pack_by_chunk:
+            pack_by_cid[cid] = pack_by_chunk[chunk]
+
+    cited_claims  = _extract_cited_claims(answer)
+
+    checks_run    = 0
+    checks_passed = 0
+    checks_failed = 0
+    citation_issues: list[dict[str, Any]] = []
+    numeric_failures = 0
+    uncited_factual  = 0
+    revised_answer   = answer
+
+    try:
+        # ── Check 1: Citation grounding ───────────────────────────────────────
+        for item in cited_claims:
+            sentence = item["sentence"]
+            for cid in item["citation_ids"]:
+                checks_run += 1
+                pack = pack_by_cid.get(cid)
+
+                if pack is None:
+                    # [N] appears in answer but no matching evidence pack exists
+                    checks_failed += 1
+                    citation_issues.append({
+                        "citation_id":    cid,
+                        "claim_fragment": sentence[:120],
+                        "issue":          "citation_id_not_found",
+                        "severity":       "error",
+                    })
+                    warnings.append(
+                        f"self_check: citation [{cid}] referenced in answer "
+                        f"but not found in evidence_packs"
+                    )
+                    continue
+
+                source_text = pack.get("parent_text") or pack.get("child_text", "")
+                # Web sources get a slightly lower bar — they're less authoritative
+                threshold = 0.25 if pack.get("source_type") == "web" else 0.30
+
+                if _is_grounded_in_text(sentence, source_text, threshold):
+                    checks_passed += 1
+                else:
+                    checks_failed += 1
+                    citation_issues.append({
+                        "citation_id":    cid,
+                        "claim_fragment": sentence[:120],
+                        "issue":          "unsupported",
+                        "severity":       "warn",
+                    })
+                    warnings.append(
+                        f"self_check: claim may not be grounded in [{cid}]: "
+                        f"{sentence[:80]}…"
+                    )
+
+        # ── Check 2: Numeric faithfulness ─────────────────────────────────────
+        for item in cited_claims:
+            sentence = item["sentence"]
+            # Strip [N] citation markers before extracting numbers — otherwise
+            # the citation index itself (e.g. [1]) registers as a numeric token
+            sentence_no_citations = _CITATION_RE.sub("", sentence)
+            numbers  = _extract_numbers(sentence_no_citations)
+
+            if not numbers:
+                continue
+
+            for cid in item["citation_ids"]:
+                pack = pack_by_cid.get(cid)
+                if pack is None:
+                    continue  # already flagged in Check 1
+
+                source_text = (pack.get("parent_text") or pack.get("child_text", "")).lower()
+
+                for num in numbers:
+                    checks_run += 1
+                    # Strip modifiers to get the bare number for source lookup.
+                    # e.g. "3x" → "3", "75%" → "75", "128 tokens" → "128"
+                    num_core = re.sub(
+                        r"\s?(?:x|%|billion|million|trillion|GB|MB|KB|ms|tokens?)$",
+                        "", num.strip(), flags=re.IGNORECASE
+                    ).strip()
+
+                    if num_core and num_core not in source_text:
+                        numeric_failures += 1
+                        checks_failed += 1
+                        citation_issues.append({
+                            "citation_id":    cid,
+                            "claim_fragment": f"Number {num!r} in: {sentence[:80]}",
+                            "issue":          "numeric_mismatch",
+                            "severity":       "warn",
+                        })
+                        warnings.append(
+                            f"self_check: number {num!r} cited via [{cid}] "
+                            f"not found verbatim in source text"
+                        )
+                        # Annotate the answer_draft inline — use zero-width space
+                        # so the marker doesn't disrupt Markdown rendering
+                        revised_answer = revised_answer.replace(
+                            f"[{cid}]",
+                            f"[{cid}]\u200b[unverified: {num}]",
+                            1,  # only first occurrence — avoid double-marking loops
+                        )
+                    else:
+                        checks_passed += 1
+
+        # ── Check 3: Uncited claim detection ──────────────────────────────────
+        all_sentences = _SENTENCE_END_RE.split(answer.strip())
+        for sent in all_sentences:
+            if _CITATION_RE.search(sent):
+                continue  # has a citation — fine
+
+            # Heuristic for "factual": contains a number OR is substantively long
+            has_number = bool(_extract_numbers(sent))
+            is_long    = len(sent.split()) > 12
+            if has_number or is_long:
+                uncited_factual += 1
+
+        if uncited_factual > 0:
+            warnings.append(
+                f"self_check: {uncited_factual} sentence(s) appear factual "
+                f"but have no citation marker"
+            )
+
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "self_check: unexpected error during verification: %s",
+            exc,
+            exc_info=True,
+            extra={"request_id": state["request_id"]},
+        )
+        warnings.append(f"self_check: verification failed due to internal error: {exc}")
+        return {
+            "answer_draft": answer,   # return ORIGINAL — do not expose partial edits
+            "warnings":     warnings,
+            "self_check_result": {
+                "passed":           False,
+                "checks_run":       0,
+                "checks_passed":    0,
+                "checks_failed":    1,
+                "citation_issues":  [],
+                "uncited_sentences": 0,
+                "numeric_failures": 0,
+                "coverage_score":   0.0,
+            },
+        }
+
+    # ── Compute final summary ────────────────────────────────────────────────
+    total       = checks_run
+    coverage    = round(checks_passed / total, 3) if total > 0 else 1.0
+    passed      = checks_failed == 0 and numeric_failures == 0
+
+    elapsed_ms = _ms(t0)
+    log_event(
+        logger,
+        event="self_check.complete",
+        request_id=state["request_id"],
+        passed=passed,
+        checks_run=checks_run,
+        checks_failed=checks_failed,
+        numeric_failures=numeric_failures,
+        uncited_sentences=uncited_factual,
+        coverage=coverage,
+        ms=elapsed_ms,
+    )
+
+    return {
+        "answer_draft": revised_answer,
+        "warnings":     warnings,
+        "self_check_result": {
+            "passed":           passed,
+            "checks_run":       checks_run,
+            "checks_passed":    checks_passed,
+            "checks_failed":    checks_failed,
+            "citation_issues":  citation_issues,
+            "uncited_sentences": uncited_factual,
+            "numeric_failures": numeric_failures,
+            "coverage_score":   coverage,
+        },
     }

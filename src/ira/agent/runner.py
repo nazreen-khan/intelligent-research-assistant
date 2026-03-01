@@ -30,8 +30,10 @@ from ira.contracts.schemas import (
     AgentTraceStep,
     AnswerResponse,
     Citation,
+    CitationIssue,
     EvidenceChunk,
     QueryRequest,
+    SelfCheckResult,
 )
 from ira.policy import check_policy
 from ira.observability.logging import log_event
@@ -240,4 +242,40 @@ def _build_response(
         evidence=evidence,
         trace=trace,
         warnings=state.get("warnings", []),
+        self_check=_build_self_check_result(state.get("self_check_result", {})),
+    )
+
+
+def _build_self_check_result(raw: dict) -> SelfCheckResult | None:
+    """
+    Convert the plain dict written by the self_check node into a typed
+    SelfCheckResult Pydantic model.
+
+    Returns None if the dict is empty (self_check node has not run yet —
+    e.g. in error paths that short-circuit before the graph runs).
+    Returns a SelfCheckResult with defaults when the node ran but produced
+    minimal output (e.g. the skip path for empty answers).
+    """
+    if not raw:
+        return None
+
+    citation_issues = [
+        CitationIssue(
+            citation_id=issue["citation_id"],
+            claim_fragment=issue["claim_fragment"],
+            issue=issue["issue"],
+            severity=issue.get("severity", "warn"),
+        )
+        for issue in raw.get("citation_issues", [])
+    ]
+
+    return SelfCheckResult(
+        passed=raw.get("passed", True),
+        checks_run=raw.get("checks_run", 0),
+        checks_passed=raw.get("checks_passed", 0),
+        checks_failed=raw.get("checks_failed", 0),
+        citation_issues=citation_issues,
+        uncited_sentences=raw.get("uncited_sentences", 0),
+        numeric_failures=raw.get("numeric_failures", 0),
+        coverage_score=raw.get("coverage_score", 1.0),
     )

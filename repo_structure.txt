@@ -185,4 +185,5 @@
         test_processor.py
         test_qdrant_index.py
         test_reranker.py
+        test_self_check.py
         test_web_search_tool.py
